@@ -1,4 +1,5 @@
 import os
+import gc
 import logging
 import tempfile
 
@@ -13,6 +14,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
+
+# Free-tier Render instances have only 512MB RAM. Long files blow past that
+# during processing, so we cap accepted audio length.
+MAX_DURATION_SECONDS = 7 * 60
 
 # 9-band EQ center frequencies (Hz) — matches the second website exactly
 EQ_BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 16000]
@@ -80,17 +85,7 @@ def change_speed(sound: AudioSegment, speed: float) -> AudioSegment:
     return shifted.set_frame_rate(sound.frame_rate)
 
 
-def apply_effects(in_path: str, out_path: str, params: dict):
-    sound = AudioSegment.from_file(in_path)
-    sound = change_speed(sound, params["speed"])
-
-    samples = np.array(sound.get_array_of_samples()).astype(np.float32)
-    if sound.channels == 2:
-        samples = samples.reshape((-1, 2)).T
-    else:
-        samples = samples.reshape((1, -1))
-    samples /= 32768.0
-
+def build_board(params: dict) -> Pedalboard:
     board = Pedalboard([])
 
     if params["bass"] > 0:
@@ -110,18 +105,64 @@ def apply_effects(in_path: str, out_path: str, params: dict):
             dry_level=1 - wet * 0.5,
             width=1.0,
         ))
+    return board
 
-    processed = board(samples, sound.frame_rate)
-    processed = np.clip(processed, -1.0, 1.0)
-    processed_int16 = (processed * 32767).astype(np.int16)
+
+def apply_effects(in_path: str, out_path: str, params: dict):
+    """
+    Memory-conscious version: process one channel at a time and drop
+    intermediate arrays as soon as they're no longer needed, so peak RAM
+    stays well under Render's 512MB free-tier limit.
+    """
+    sound = AudioSegment.from_file(in_path)
+    sound = change_speed(sound, params["speed"])
+
+    channels = sound.channels
+    frame_rate = sound.frame_rate
+    sample_width = sound.sample_width
+    raw = sound.raw_data
+    del sound
+    gc.collect()
+
+    board = build_board(params)
+
+    # int16 -> float32 in [-1, 1], shape (channels, num_frames)
+    samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+    del raw
+    if channels == 2:
+        samples = samples.reshape((-1, 2)).T
+    else:
+        samples = samples.reshape((1, -1))
+    samples *= (1.0 / 32768.0)
+
+    processed_channels = []
+    for ch in range(channels):
+        one = board(samples[ch:ch + 1], frame_rate)
+        np.clip(one, -1.0, 1.0, out=one)
+        one *= 32767.0
+        processed_channels.append(one[0].astype(np.int16))
+        del one
+    del samples
+    gc.collect()
+
+    if channels == 2:
+        processed_int16 = np.stack(processed_channels, axis=-1)  # interleaved
+        pcm_bytes = processed_int16.tobytes()
+    else:
+        pcm_bytes = processed_channels[0].tobytes()
+    del processed_channels
+    gc.collect()
 
     out_sound = AudioSegment(
-        processed_int16.T.tobytes() if sound.channels == 2 else processed_int16.tobytes(),
-        frame_rate=sound.frame_rate,
-        sample_width=2,
-        channels=sound.channels,
+        pcm_bytes,
+        frame_rate=frame_rate,
+        sample_width=sample_width,
+        channels=channels,
     )
+    del pcm_bytes
     out_sound.export(out_path, format="mp3", bitrate=params["bitrate"])
+    del out_sound
+    gc.collect()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,6 +174,15 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_obj = msg.audio or msg.voice or msg.document
     if file_obj is None:
         return
+    duration = getattr(file_obj, "duration", None)
+    if duration and duration > MAX_DURATION_SECONDS:
+        await msg.reply_text(
+            f"Kechirasiz, bu qo'shiq juda uzun ({duration // 60}:{duration % 60:02d}). "
+            f"Server xotirasi cheklangan bo'lgani uchun {MAX_DURATION_SECONDS // 60} "
+            "daqiqagacha bo'lgan fayllarni qabul qilaman."
+        )
+        return
+
     params = parse_params(msg.caption)
 
     status = await msg.reply_text("Ishlov berilmoqda, biroz kuting...")
