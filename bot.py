@@ -10,6 +10,26 @@ from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, ContextTypes, filters
 
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Health(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+
+def run_health():
+    port = int(os.environ.get("PORT", 10000))
+    HTTPServer(("0.0.0.0", port), Health).serve_forever()
+
+threading.Thread(target=run_health, daemon=True).start()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
