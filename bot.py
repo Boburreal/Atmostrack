@@ -49,49 +49,74 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
-# 10 daqiqagacha ruxsat beramiz
 MAX_DURATION_SECONDS = 10 * 60
 
-# 9-band Equalizer chastotalari
 EQ_BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 16000]
 
-# Standart sozlamalar (endi speed = 1.0)
 DEFAULTS = {
     "speed": 1.0,
     "reverb": 40,
     "bass": 0,
-    "eq": [2, -4, -4, 0, 0, +2, +5, +7, +8],
+    "eq": [8, 6, 2, 0, 0, 0, 0, 0, 0],
     "bitrate": "192k",
 }
 
-# Turli rejimlar uchun tayyor sozlamalar
+# ====================== PRESETLAR ======================
 PRESETS = {
     "standart": {
         "speed": 1.0,
-        "reverb": 40,
+        "reverb": 50,
         "bass": 0,
-        "eq": [2, -4, -4, 0, 0, +2, +5, +7, +8],
-        "bitrate": "192k",
+        "eq": [2, -4, -4, 0, 0, 2, 5, 7, 8],
+        "bitrate": "320k",
     },
     "slowed_reverb": {
-        "speed": 0.82,          # Sekinroq
-        "reverb": 55,           # Ko‘proq reverb
+        "speed": 0.6,
+        "reverb": 40,
         "bass": 0,
-        "eq": [+2, -4, -4, 0, 0, +2, +3, +5, +7],
-        "bitrate": "192k",
+        "eq": [2, -4, -4, 0, 0, 2, 5, 7, 8],
+        "bitrate": "320k",
     },
     "bass_boost": {
         "speed": 1.0,
         "reverb": 25,
-        "bass": 60,             # Kuchli bass
+        "bass": 70,
         "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0],
+        "bitrate": "192k",
+    },
+    "pitch_up": {
+        "speed": 1.12,
+        "reverb": 30,
+        "bass": 10,
+        "eq": [4, 3, 1, 0, 0, 1, 2, 1, 0],
+        "bitrate": "192k",
+    },
+    "pitch_down": {
+        "speed": 0.88,
+        "reverb": 35,
+        "bass": 20,
+        "eq": [7, 5, 2, 0, 0, 0, 0, 0, 0],
+        "bitrate": "192k",
+    },
+    "eight_d": {
+        "speed": 1.0,
+        "reverb": 45,
+        "bass": 20,
+        "eq": [5, 3, 0, 0, 1, 2, 3, 2, 1],
+        "bitrate": "192k",
+        "is_8d": True,
+    },
+    "echo": {
+        "speed": 1.0,
+        "reverb": 65,
+        "bass": 10,
+        "eq": [4, 2, 0, 0, 0, 1, 2, 1, 0],
         "bitrate": "192k",
     },
 }
 
 
 def change_speed(sound: AudioSegment, speed: float) -> AudioSegment:
-    """Tezlikni o‘zgartirish (pitch ham o‘zgaradi)"""
     new_frame_rate = int(sound.frame_rate * speed)
     shifted = sound._spawn(sound.raw_data, overrides={"frame_rate": new_frame_rate})
     return shifted.set_frame_rate(sound.frame_rate)
@@ -100,17 +125,14 @@ def change_speed(sound: AudioSegment, speed: float) -> AudioSegment:
 def build_board(params: dict) -> Pedalboard:
     board = Pedalboard([])
 
-    # Bass
     if params["bass"] > 0:
         gain_db = (params["bass"] / 100.0) * 12.0
         board.append(LowShelfFilter(cutoff_frequency_hz=100, gain_db=gain_db))
 
-    # Equalizer
     for freq, gain_db in zip(EQ_BANDS, params["eq"]):
         if gain_db != 0:
             board.append(PeakFilter(cutoff_frequency_hz=freq, gain_db=gain_db, q=1.0))
 
-    # Reverb
     if params["reverb"] > 0:
         wet = params["reverb"] / 100.0
         board.append(Reverb(
@@ -123,8 +145,25 @@ def build_board(params: dict) -> Pedalboard:
     return board
 
 
+def apply_8d_effect(samples: np.ndarray, frame_rate: int) -> np.ndarray:
+    """Oddiy 8D effekt (chap-o'ngga sekin harakat)"""
+    if samples.shape[0] == 1:
+        # Mono bo'lsa stereoga aylantiramiz
+        samples = np.vstack([samples, samples])
+
+    num_frames = samples.shape[1]
+    t = np.arange(num_frames) / frame_rate
+
+    # Sekin aylanuvchi pan (0.15 Hz)
+    pan = np.sin(2 * np.pi * 0.15 * t)
+
+    left = samples[0] * (1 - pan) * 0.8 + samples[1] * 0.2
+    right = samples[1] * (1 + pan) * 0.8 + samples[0] * 0.2
+
+    return np.vstack([left, right])
+
+
 def apply_effects(in_path: str, out_path: str, params: dict):
-    """Xotirani tejab ishlov berish"""
     sound = AudioSegment.from_file(in_path)
     sound = change_speed(sound, params["speed"])
 
@@ -139,28 +178,43 @@ def apply_effects(in_path: str, out_path: str, params: dict):
 
     samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
     del raw
+
     if channels == 2:
         samples = samples.reshape((-1, 2)).T
     else:
         samples = samples.reshape((1, -1))
+
     samples *= (1.0 / 32768.0)
 
+    # Oddiy effektlar
     processed_channels = []
-    for ch in range(channels):
+    for ch in range(samples.shape[0]):
         one = board(samples[ch:ch + 1], frame_rate)
         np.clip(one, -1.0, 1.0, out=one)
-        one *= 32767.0
-        processed_channels.append(one[0].astype(np.int16))
+        processed_channels.append(one[0])
         del one
+
+    processed = np.vstack(processed_channels)
+    del processed_channels
     del samples
     gc.collect()
 
-    if channels == 2:
-        processed_int16 = np.stack(processed_channels, axis=-1)
-        pcm_bytes = processed_int16.tobytes()
+    # 8D effekti
+    if params.get("is_8d"):
+        processed = apply_8d_effect(processed, frame_rate)
+
+    # Int16 ga qaytarish
+    processed = np.clip(processed, -1.0, 1.0)
+    processed = (processed * 32767.0).astype(np.int16)
+
+    if processed.shape[0] == 2:
+        pcm_bytes = processed.T.tobytes()
+        channels = 2
     else:
-        pcm_bytes = processed_channels[0].tobytes()
-    del processed_channels
+        pcm_bytes = processed[0].tobytes()
+        channels = 1
+
+    del processed
     gc.collect()
 
     out_sound = AudioSegment(
@@ -187,14 +241,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Audio kelganda ishlaydi"""
     msg = update.message
     file_obj = msg.audio or msg.voice or msg.document
 
     if file_obj is None:
         return
 
-    # Uzunlikni tekshirish
     duration = getattr(file_obj, "duration", None)
     if duration and duration > MAX_DURATION_SECONDS:
         await msg.reply_text(
@@ -203,11 +255,8 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Foydalanuvchi ma'lumotlarini saqlab qo'yamiz
     context.user_data["file_id"] = file_obj.file_id
-    context.user_data["duration"] = duration
 
-    # Tugmalar
     keyboard = [
         [
             InlineKeyboardButton("Standart", callback_data="preset_standart"),
@@ -215,8 +264,15 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("Bass Boost", callback_data="preset_bass_boost"),
+            InlineKeyboardButton("Echo / Delay", callback_data="preset_echo"),
         ],
-        # Keyinchalik shu yerga 8D, Pitch va boshqalarni qo'shamiz
+        [
+            InlineKeyboardButton("Pitch Up", callback_data="preset_pitch_up"),
+            InlineKeyboardButton("Pitch Down", callback_data="preset_pitch_down"),
+        ],
+        [
+            InlineKeyboardButton("8D Audio", callback_data="preset_eight_d"),
+        ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -227,9 +283,8 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Tugma bosilganda ishlaydi"""
     query = update.callback_query
-    await query.answer()  # Tugma bosilganini bildiradi
+    await query.answer()
 
     data = query.data
     if not data.startswith("preset_"):
@@ -247,7 +302,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Audio topilmadi. Qaytadan yuboring.")
         return
 
-    # Status xabar
     await query.edit_message_text("Ishlov berilmoqda, biroz kuting...")
 
     try:
@@ -260,11 +314,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await tg_file.download_to_drive(in_path)
             apply_effects(in_path, out_path, params)
 
-            # Natijani yuborish
             summary = (
                 f"Rejim: {preset_name}\n"
-                f"speed={params['speed']}  reverb={params['reverb']}  "
-                f"bass={params['bass']}"
+                f"speed={params['speed']}  reverb={params['reverb']}  bass={params['bass']}"
             )
 
             with open(out_path, "rb") as f:
@@ -274,7 +326,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     caption=summary
                 )
 
-        # Eski xabarni o'chirish
         await query.message.delete()
 
     except Exception as e:
