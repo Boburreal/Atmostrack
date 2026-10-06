@@ -2,104 +2,96 @@ import os
 import gc
 import logging
 import tempfile
-
 import numpy as np
 from pydub import AudioSegment
 from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter
 
-from telegram import Update
-from telegram.ext import Application, MessageHandler, CommandHandler, ContextTypes, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    MessageHandler,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+)
 
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+
+# ====================== HEALTH CHECK (Render uchun) ======================
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
+
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
+
     def log_message(self, *args):
         pass
+
 
 def run_health():
     port = int(os.environ.get("PORT", 10000))
     HTTPServer(("0.0.0.0", port), Health).serve_forever()
 
+
 threading.Thread(target=run_health, daemon=True).start()
+# ========================================================================
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
-# Free-tier Render instances have only 512MB RAM. Long files blow past that
-# during processing, so we cap accepted audio length.
-MAX_DURATION_SECONDS = 7 * 60
+# 10 daqiqagacha ruxsat beramiz
+MAX_DURATION_SECONDS = 10 * 60
 
-# 9-band EQ center frequencies (Hz) — matches the second website exactly
+# 9-band Equalizer chastotalari
 EQ_BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 16000]
 
+# Standart sozlamalar (endi speed = 1.0)
 DEFAULTS = {
-    "speed": 0.95,
-    "reverb": 40,                          # 0-100 %
-    "bass": 0,                             # 0-100 % (site 1's "Bass boost")
-    "eq": [8, 6, 2, 0, 0, 0, 0, 0, 0],      # dB per band (site 2's "Bass Boost" preset)
+    "speed": 1.0,
+    "reverb": 40,
+    "bass": 0,
+    "eq": [8, 6, 2, 0, 0, 0, 0, 0, 0],
     "bitrate": "192k",
 }
 
-HELP_TEXT = (
-    "Qo'shiqni (audio fayl) menga yuboring. Sozlamalarni caption (izoh) qismida bering:\n\n"
-    "speed=0.95 reverb=40 bass=0 eq=8,6,2,0,0,0,0,0,0 bitrate=320\n\n"
-    "— speed: 0.5–1.5 (1 = o'zgarmaydi, kichikroq = sekinroq)\n"
-    "— reverb: 0–100 (%)\n"
-    "— bass: 0–100 (% past boost, 60Hz atrofida)\n"
-    "— eq: 9 ta dB qiymat vergul bilan, tartib bo'yicha 60/170/310/600/1k/3k/6k/12k/16k Hz, "
-    "har biri -12..+12 oralig'ida\n"
-    "— bitrate: 128, 192, 256 yoki 320\n\n"
-    "Caption bo'sh bo'lsa standart sozlamalar ishlatiladi:\n"
-    f"speed={DEFAULTS['speed']} reverb={DEFAULTS['reverb']} bass={DEFAULTS['bass']} "
-    f"eq={','.join(map(str, DEFAULTS['eq']))} bitrate=192\n\n"
-    "Faqat o'zgartirmoqchi bo'lgan qiymatlarni yozsangiz ham bo'ladi, masalan:\n"
-    "reverb=60 bitrate=320"
-)
-
-
-def parse_params(caption):
-    params = dict(DEFAULTS)
-    params["eq"] = list(DEFAULTS["eq"])
-    if not caption:
-        return params
-    for token in caption.split():
-        if "=" not in token:
-            continue
-        key, val = token.split("=", 1)
-        key = key.strip().lower()
-        val = val.strip()
-        try:
-            if key == "speed":
-                params["speed"] = max(0.5, min(1.5, float(val)))
-            elif key == "reverb":
-                params["reverb"] = max(0, min(100, float(val)))
-            elif key == "bass":
-                params["bass"] = max(0, min(100, float(val)))
-            elif key == "eq":
-                vals = [max(-12, min(12, float(x))) for x in val.split(",")]
-                if len(vals) == 9:
-                    params["eq"] = vals
-            elif key == "bitrate":
-                b = val.replace("k", "").replace("kbps", "")
-                if b in ("128", "192", "256", "320"):
-                    params["bitrate"] = f"{b}k"
-        except ValueError:
-            continue
-    return params
+# Turli rejimlar uchun tayyor sozlamalar
+PRESETS = {
+    "standart": {
+        "speed": 1.0,
+        "reverb": 40,
+        "bass": 0,
+        "eq": [8, 6, 2, 0, 0, 0, 0, 0, 0],
+        "bitrate": "192k",
+    },
+    "slowed_reverb": {
+        "speed": 0.82,          # Sekinroq
+        "reverb": 55,           # Ko‘proq reverb
+        "bass": 15,
+        "eq": [6, 4, 1, 0, 0, 0, 0, 0, 0],
+        "bitrate": "192k",
+    },
+    "bass_boost": {
+        "speed": 1.0,
+        "reverb": 25,
+        "bass": 70,             # Kuchli bass
+        "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0],
+        "bitrate": "192k",
+    },
+}
 
 
 def change_speed(sound: AudioSegment, speed: float) -> AudioSegment:
-    """Classic vinyl-style speed change (also shifts pitch), same as site 1's Speed slider."""
+    """Tezlikni o‘zgartirish (pitch ham o‘zgaradi)"""
     new_frame_rate = int(sound.frame_rate * speed)
     shifted = sound._spawn(sound.raw_data, overrides={"frame_rate": new_frame_rate})
     return shifted.set_frame_rate(sound.frame_rate)
@@ -108,14 +100,17 @@ def change_speed(sound: AudioSegment, speed: float) -> AudioSegment:
 def build_board(params: dict) -> Pedalboard:
     board = Pedalboard([])
 
+    # Bass
     if params["bass"] > 0:
         gain_db = (params["bass"] / 100.0) * 12.0
         board.append(LowShelfFilter(cutoff_frequency_hz=100, gain_db=gain_db))
 
+    # Equalizer
     for freq, gain_db in zip(EQ_BANDS, params["eq"]):
         if gain_db != 0:
             board.append(PeakFilter(cutoff_frequency_hz=freq, gain_db=gain_db, q=1.0))
 
+    # Reverb
     if params["reverb"] > 0:
         wet = params["reverb"] / 100.0
         board.append(Reverb(
@@ -129,11 +124,7 @@ def build_board(params: dict) -> Pedalboard:
 
 
 def apply_effects(in_path: str, out_path: str, params: dict):
-    """
-    Memory-conscious version: process one channel at a time and drop
-    intermediate arrays as soon as they're no longer needed, so peak RAM
-    stays well under Render's 512MB free-tier limit.
-    """
+    """Xotirani tejab ishlov berish"""
     sound = AudioSegment.from_file(in_path)
     sound = change_speed(sound, params["speed"])
 
@@ -146,7 +137,6 @@ def apply_effects(in_path: str, out_path: str, params: dict):
 
     board = build_board(params)
 
-    # int16 -> float32 in [-1, 1], shape (channels, num_frames)
     samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
     del raw
     if channels == 2:
@@ -166,7 +156,7 @@ def apply_effects(in_path: str, out_path: str, params: dict):
     gc.collect()
 
     if channels == 2:
-        processed_int16 = np.stack(processed_channels, axis=-1)  # interleaved
+        processed_int16 = np.stack(processed_channels, axis=-1)
         pcm_bytes = processed_int16.tobytes()
     else:
         pcm_bytes = processed_channels[0].tobytes()
@@ -185,54 +175,121 @@ def apply_effects(in_path: str, out_path: str, params: dict):
     gc.collect()
 
 
+# ====================== HANDLERLAR ======================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(HELP_TEXT)
+    text = (
+        "Salom! Men musiqaga effekt beradigan botman.\n\n"
+        "Shunchaki audio fayl yuboring.\n"
+        "Keyin kerakli rejimni tugmadan tanlaysiz."
+    )
+    await update.message.reply_text(text)
 
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Audio kelganda ishlaydi"""
     msg = update.message
     file_obj = msg.audio or msg.voice or msg.document
+
     if file_obj is None:
         return
+
+    # Uzunlikni tekshirish
     duration = getattr(file_obj, "duration", None)
     if duration and duration > MAX_DURATION_SECONDS:
         await msg.reply_text(
-            f"Kechirasiz, bu qo'shiq juda uzun ({duration // 60}:{duration % 60:02d}). "
-            f"Server xotirasi cheklangan bo'lgani uchun {MAX_DURATION_SECONDS // 60} "
-            "daqiqagacha bo'lgan fayllarni qabul qilaman."
+            f"Kechirasiz, bu qo'shiq juda uzun ({duration // 60}:{duration % 60:02d}).\n"
+            f"Hozircha {MAX_DURATION_SECONDS // 60} daqiqagacha bo'lgan fayllarni qabul qilaman."
         )
         return
 
-    params = parse_params(msg.caption)
+    # Foydalanuvchi ma'lumotlarini saqlab qo'yamiz
+    context.user_data["file_id"] = file_obj.file_id
+    context.user_data["duration"] = duration
 
-    status = await msg.reply_text("Ishlov berilmoqda, biroz kuting...")
+    # Tugmalar
+    keyboard = [
+        [
+            InlineKeyboardButton("Standart", callback_data="preset_standart"),
+            InlineKeyboardButton("Slowed + Reverb", callback_data="preset_slowed_reverb"),
+        ],
+        [
+            InlineKeyboardButton("Bass Boost", callback_data="preset_bass_boost"),
+        ],
+        # Keyinchalik shu yerga 8D, Pitch va boshqalarni qo'shamiz
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    tg_file = await context.bot.get_file(file_obj.file_id)
-    with tempfile.TemporaryDirectory() as tmp:
-        in_path = os.path.join(tmp, "input")
-        out_path = os.path.join(tmp, "output.mp3")
-        await tg_file.download_to_drive(in_path)
-        try:
+    await msg.reply_text(
+        "Audio qabul qilindi.\n\nQanday ishlov beramiz?",
+        reply_markup=reply_markup
+    )
+
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tugma bosilganda ishlaydi"""
+    query = update.callback_query
+    await query.answer()  # Tugma bosilganini bildiradi
+
+    data = query.data
+    if not data.startswith("preset_"):
+        return
+
+    preset_name = data.replace("preset_", "")
+    params = PRESETS.get(preset_name)
+
+    if not params:
+        await query.edit_message_text("Noma'lum rejim.")
+        return
+
+    file_id = context.user_data.get("file_id")
+    if not file_id:
+        await query.edit_message_text("Audio topilmadi. Qaytadan yuboring.")
+        return
+
+    # Status xabar
+    await query.edit_message_text("Ishlov berilmoqda, biroz kuting...")
+
+    try:
+        tg_file = await context.bot.get_file(file_id)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            in_path = os.path.join(tmp, "input")
+            out_path = os.path.join(tmp, "output.mp3")
+
+            await tg_file.download_to_drive(in_path)
             apply_effects(in_path, out_path, params)
-        except Exception as e:
-            logger.exception("processing failed")
-            await status.edit_text(f"Xatolik chiqdi: {e}")
-            return
 
-        summary = (
-            f"speed={params['speed']} reverb={params['reverb']} bass={params['bass']} "
-            f"eq={','.join(map(str, params['eq']))} bitrate={params['bitrate']}"
-        )
-        with open(out_path, "rb") as f:
-            await msg.reply_audio(audio=f, caption=summary)
-        await status.delete()
+            # Natijani yuborish
+            summary = (
+                f"Rejim: {preset_name}\n"
+                f"speed={params['speed']}  reverb={params['reverb']}  "
+                f"bass={params['bass']}"
+            )
+
+            with open(out_path, "rb") as f:
+                await context.bot.send_audio(
+                    chat_id=query.message.chat_id,
+                    audio=f,
+                    caption=summary
+                )
+
+        # Eski xabarni o'chirish
+        await query.message.delete()
+
+    except Exception as e:
+        logger.exception("Xatolik")
+        await query.edit_message_text(f"Xatolik yuz berdi:\n{e}")
 
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.AUDIO, handle_audio))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
     logger.info("Bot ishga tushdi")
     app.run_polling()
 
