@@ -60,7 +60,7 @@ DEFAULTS = {
     "speed": 1.0,
     "reverb": 40,
     "bass": 0,
-    "eq": [8, 6, 2, 0, 0, 0, 0, 0, 0],
+    "eq": [2, -4, -4, 0, 0, +2, +5, +7, +8],
     "bitrate": "192k",
 }
 
@@ -70,20 +70,20 @@ PRESETS = {
         "speed": 1.0,
         "reverb": 40,
         "bass": 0,
-        "eq": [8, 6, 2, 0, 0, 0, 0, 0, 0],
+        "eq": [2, -4, -4, 0, 0, +2, +5, +7, +8],
         "bitrate": "192k",
     },
     "slowed_reverb": {
         "speed": 0.82,          # Sekinroq
         "reverb": 55,           # Ko‘proq reverb
-        "bass": 15,
-        "eq": [6, 4, 1, 0, 0, 0, 0, 0, 0],
+        "bass": 0,
+        "eq": [+2, -4, -4, 0, 0, +2, +3, +5, +7],
         "bitrate": "192k",
     },
     "bass_boost": {
         "speed": 1.0,
         "reverb": 25,
-        "bass": 70,             # Kuchli bass
+        "bass": 60,             # Kuchli bass
         "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0],
         "bitrate": "192k",
     },
