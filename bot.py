@@ -134,13 +134,21 @@ def build_board(params: dict) -> Pedalboard:
 
 
 def apply_8d_effect(samples: np.ndarray, frame_rate: int) -> np.ndarray:
+    """Kuchliroq 8D effekt"""
     if samples.shape[0] == 1:
         samples = np.vstack([samples, samples])
+
     num_frames = samples.shape[1]
     t = np.arange(num_frames) / frame_rate
-    pan = np.sin(2 * np.pi * 0.15 * t)
-    left = samples[0] * (1 - pan) * 0.8 + samples[1] * 0.2
-    right = samples[1] * (1 + pan) * 0.8 + samples[0] * 0.2
+
+    # Tezroq va kuchliroq aylanısh (0.25 Hz)
+    pan = np.sin(2 * np.pi * 0.25 * t)
+
+    # Kuchliroq pan
+    left = samples[0] * (0.5 - 0.5 * pan) + samples[1] * 0.15
+    right = samples[1] * (0.5 + 0.5 * pan) + samples[0] * 0.15
+
+    # Biroz reverb hissi uchun
     return np.vstack([left, right])
 
 
