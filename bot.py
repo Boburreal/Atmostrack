@@ -49,7 +49,7 @@ threading.Thread(target=run_health, daemon=True).start()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ["8947877567:AAG39GwRrftBbPh4mW1B78BfFNClGyg1afo"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 MAX_DURATION_SECONDS = 10 * 60
 EQ_BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 16000]
 
@@ -188,7 +188,7 @@ PRESETS = {
         "bitrate": "320k",
     },
     "slowed_reverb": {
-        "speed": 0.90,
+        "speed": 0.6,
         "reverb": 40,
         "bass": 0,
         "eq": [2, -4, -4, 0, 0, 2, 5, 7, 8],
@@ -197,38 +197,38 @@ PRESETS = {
     "bass_boost": {
         "speed": 1.0,
         "reverb": 25,
-        "bass": 0,
-        "eq": [4, 2, 2, 0, 0, 2, 3, 4, 3],
-        "bitrate": "320k",
+        "bass": 70,
+        "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0],
+        "bitrate": "192k",
     },
     "pitch_up": {
-        "speed": 1.18,
+        "speed": 1.12,
         "reverb": 30,
-        "bass": 0,
-        "eq": [3, 2, -2, 0, 0, 1, 2, 1, 0],
-        "bitrate": "320k",
+        "bass": 10,
+        "eq": [4, 3, 1, 0, 0, 1, 2, 1, 0],
+        "bitrate": "192k",
     },
     "pitch_down": {
         "speed": 0.88,
         "reverb": 35,
-        "bass": 0,
-        "eq": [2, 0, -1, 0, 0, 0, 0, 2, 4],
-        "bitrate": "320k",
+        "bass": 20,
+        "eq": [7, 5, 2, 0, 0, 0, 0, 0, 0],
+        "bitrate": "192k",
     },
     "eight_d": {
         "speed": 1.0,
         "reverb": 45,
         "bass": 20,
         "eq": [5, 3, 0, 0, 1, 2, 3, 2, 1],
-        "bitrate": "320k",
+        "bitrate": "192k",
         "is_8d": True,
     },
     "echo": {
-        "speed": 0.5,
-        "reverb": 50,
-        "bass": 0,
+        "speed": 1.0,
+        "reverb": 65,
+        "bass": 10,
         "eq": [4, 2, 0, 0, 0, 1, 2, 1, 0],
-        "bitrate": "320k",
+        "bitrate": "192k",
     },
 }
 
@@ -353,7 +353,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
     await update.message.reply_text(
-        "Salom! Men musiqaga atmosfera effekt beradigan botman.\n\n"
+        "Salom! Men musiqaga effekt beradigan botman.\n\n"
         "Shunchaki audio fayl yuboring.\n"
         "Keyin kerakli rejimni tugmadan tanlaysiz."
     )
@@ -578,7 +578,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    app = Application.builder().token(8947877567:AAG39GwRrftBbPh4mW1B78BfFNClGyg1afo).build()
+    app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("myid", myid_cmd))
