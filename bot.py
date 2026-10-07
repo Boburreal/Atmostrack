@@ -3,6 +3,7 @@ import gc
 import logging
 import tempfile
 import re
+import json
 import numpy as np
 from pydub import AudioSegment
 from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter
@@ -48,9 +49,134 @@ threading.Thread(target=run_health, daemon=True).start()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
+BOT_TOKEN = os.environ["8947877567:AAG39GwRrftBbPh4mW1B78BfFNClGyg1afo"]
 MAX_DURATION_SECONDS = 10 * 60
 EQ_BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 16000]
+
+# ====================== RUXSAT TIZIMI ======================
+# ADMIN_ID  - sizning Telegram ID raqamingiz (Render > Environment ga yoziladi)
+# ALLOWED_IDS - doimiy ruxsat berilganlar, vergul bilan: 111,222,333 (ixtiyoriy)
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
+if not ADMIN_ID:
+    logger.warning("ADMIN_ID o'rnatilmagan! Faqat /myid ishlaydi.")
+
+ENV_ALLOWED = {
+    int(x) for x in os.environ.get("ALLOWED_IDS", "").replace(" ", "").split(",") if x.isdigit()
+}
+ALLOWED_FILE = "allowed_users.json"
+_notified = set()
+
+
+def load_dynamic() -> set:
+    try:
+        with open(ALLOWED_FILE, "r", encoding="utf-8") as f:
+            return {int(x) for x in json.load(f)}
+    except Exception:
+        return set()
+
+
+def save_dynamic(ids: set):
+    try:
+        with open(ALLOWED_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(ids), f)
+    except Exception:
+        logger.exception("Ruxsat ro'yxatini saqlab bo'lmadi")
+
+
+def is_allowed(uid: int) -> bool:
+    return uid == ADMIN_ID or uid in ENV_ALLOWED or uid in load_dynamic()
+
+
+async def check_access(update, context) -> bool:
+    user = update.effective_user
+    if user and is_allowed(user.id):
+        return True
+
+    if update.callback_query:
+        await update.callback_query.answer("Sizda ruxsat yo'q.", show_alert=True)
+    elif update.message:
+        await update.message.reply_text(
+            "Kechirasiz, sizda bu botdan foydalanish uchun ruxsat yo'q.\n"
+            f"Sizning ID raqamingiz: {user.id}\n"
+            "Ruxsat olish uchun shu raqamni admin'ga yuboring."
+        )
+        # adminni bir marta xabardor qilish
+        if ADMIN_ID and user.id not in _notified:
+            _notified.add(user.id)
+            try:
+                await context.bot.send_message(
+                    ADMIN_ID,
+                    f"Ruxsat so'ralmoqda:\n{user.full_name} (@{user.username})\n"
+                    f"ID: {user.id}\n\nRuxsat berish: /add {user.id}",
+                )
+            except Exception:
+                pass
+    return False
+
+
+def admin_only(func):
+    async def wrapper(update, context):
+        if not update.effective_user or update.effective_user.id != ADMIN_ID:
+            return
+        return await func(update, context)
+    return wrapper
+
+
+async def myid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Sizning ID raqamingiz: {update.effective_user.id}")
+
+
+def _all_ids() -> set:
+    return ENV_ALLOWED | load_dynamic()
+
+
+@admin_only
+async def add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Format: /add 123456789")
+        return
+    uid = int(context.args[0])
+    ids = load_dynamic()
+    ids.add(uid)
+    save_dynamic(ids)
+    await update.message.reply_text(
+        f"Ruxsat berildi: {uid}\n\n"
+        "Eslatma: bot qayta ishga tushsa (Render'da deploy/restart) /add orqali "
+        "qo'shilganlar o'chib ketishi mumkin. Doimiy qilish uchun Render > Environment > "
+        "ALLOWED_IDS ga quyidagini yozing:\n"
+        f"{','.join(str(i) for i in sorted(_all_ids()))}"
+    )
+    try:
+        await context.bot.send_message(uid, "Sizga botdan foydalanishga ruxsat berildi. /start bosing.")
+    except Exception:
+        pass
+
+
+@admin_only
+async def remove_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Format: /remove 123456789")
+        return
+    uid = int(context.args[0])
+    ids = load_dynamic()
+    ids.discard(uid)
+    save_dynamic(ids)
+    msg = f"Ruxsat olib tashlandi: {uid}"
+    if uid in ENV_ALLOWED:
+        msg += "\n(Bu ID Render'dagi ALLOWED_IDS ichida ham bor, uni o'sha yerdan ham o'chiring.)"
+    await update.message.reply_text(msg)
+
+
+@admin_only
+async def list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ids = sorted(_all_ids())
+    if not ids:
+        await update.message.reply_text("Hozircha faqat siz (admin) ruxsatga egasiz.")
+        return
+    await update.message.reply_text(
+        "Ruxsat berilganlar:\n" + "\n".join(str(i) for i in ids)
+    )
+# ===========================================================
 
 # ====================== PRESETLAR ======================
 PRESETS = {
@@ -62,7 +188,7 @@ PRESETS = {
         "bitrate": "320k",
     },
     "slowed_reverb": {
-        "speed": 0.6,
+        "speed": 0.90,
         "reverb": 40,
         "bass": 0,
         "eq": [2, -4, -4, 0, 0, 2, 5, 7, 8],
@@ -71,38 +197,38 @@ PRESETS = {
     "bass_boost": {
         "speed": 1.0,
         "reverb": 25,
-        "bass": 70,
-        "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0],
-        "bitrate": "192k",
+        "bass": 0,
+        "eq": [4, 2, 2, 0, 0, 2, 3, 4, 3],
+        "bitrate": "320k",
     },
     "pitch_up": {
-        "speed": 1.12,
+        "speed": 1.18,
         "reverb": 30,
-        "bass": 10,
-        "eq": [4, 3, 1, 0, 0, 1, 2, 1, 0],
-        "bitrate": "192k",
+        "bass": 0,
+        "eq": [3, 2, -2, 0, 0, 1, 2, 1, 0],
+        "bitrate": "320k",
     },
     "pitch_down": {
         "speed": 0.88,
         "reverb": 35,
-        "bass": 20,
-        "eq": [7, 5, 2, 0, 0, 0, 0, 0, 0],
-        "bitrate": "192k",
+        "bass": 0,
+        "eq": [2, 0, -1, 0, 0, 0, 0, 2, 4],
+        "bitrate": "320k",
     },
     "eight_d": {
         "speed": 1.0,
         "reverb": 45,
         "bass": 20,
         "eq": [5, 3, 0, 0, 1, 2, 3, 2, 1],
-        "bitrate": "192k",
+        "bitrate": "320k",
         "is_8d": True,
     },
     "echo": {
-        "speed": 1.0,
-        "reverb": 65,
-        "bass": 10,
+        "speed": 0.5,
+        "reverb": 50,
+        "bass": 0,
         "eq": [4, 2, 0, 0, 0, 1, 2, 1, 0],
-        "bitrate": "192k",
+        "bitrate": "320k",
     },
 }
 
@@ -224,14 +350,18 @@ def parse_time(t: str) -> int:
 # ====================== HANDLERLAR ======================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
     await update.message.reply_text(
-        "Salom! Men musiqaga effekt beradigan botman.\n\n"
+        "Salom! Men musiqaga atmosfera effekt beradigan botman.\n\n"
         "Shunchaki audio fayl yuboring.\n"
         "Keyin kerakli rejimni tugmadan tanlaysiz."
     )
 
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
     msg = update.message
     file_obj = msg.audio or msg.voice or msg.document
     if not file_obj:
@@ -271,6 +401,8 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update, context):
+        return
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -402,6 +534,8 @@ async def process_audio(query, context, params, trim=None):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Kesish uchun matn kiritilganda"""
+    if not is_allowed(update.effective_user.id):
+        return
     if not context.user_data.get("waiting_trim"):
         return
 
@@ -444,9 +578,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(8947877567:AAG39GwRrftBbPh4mW1B78BfFNClGyg1afo).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
+    app.add_handler(CommandHandler("myid", myid_cmd))
+    app.add_handler(CommandHandler("add", add_cmd))
+    app.add_handler(CommandHandler("remove", remove_cmd))
+    app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.AUDIO, handle_audio))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
