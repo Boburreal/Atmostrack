@@ -1,13 +1,11 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# Установка FFmpeg
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# Установка библиотек (исправлено uvicorn)
-RUN pip install --no-cache-dir pyTelegramBotAPI fastapi uvicorn requests python-multipart
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
 CMD ["python", "bot.py"]
