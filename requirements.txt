@@ -1,4 +1,5 @@
-python-telegram-bot==21.6
-pydub==0.25.1
-pedalboard==0.9.14
-numpy==1.26.4
+pyTelegramBotAPI
+fastapi
+uvicorn
+requests
+python-multipart
