@@ -1,5 +1,5 @@
 python-telegram-bot==21.6
 pydub==0.25.1
-pedalboard>=0.9.0
-numpy
-mutagen
+numpy==1.26.4
+pedalboard==0.9.16
+mutagen==1.47.0
