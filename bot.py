@@ -257,21 +257,25 @@ def build_board(p: dict) -> Pedalboard:
     return board
 
 
-def apply_8d(samples: np.ndarray, sr: int) -> np.ndarray:
-    """Ovoz boshni aylanib chiqqandek (teng quvvatli panning, ~8 soniyada bir aylanish)."""
-    mono = (samples[0] + samples[1]) * 0.5
-    t = np.arange(mono.shape[0], dtype=np.float32) / sr
-    pan = np.sin(2 * np.pi * 0.125 * t)                  # -1 (chap) .. +1 (o'ng)
-    angle = (pan + 1.0) * (np.pi / 4.0)                  # 0 .. pi/2
-    left = mono * np.cos(angle) * 1.35
-    right = mono * np.sin(angle) * 1.35
-    # asl stereo'dan ozgina qo'shamiz, tabiiyroq chiqishi uchun
-    left += samples[0] * 0.25
-    right += samples[1] * 0.25
+CHUNK_SEC = 10          # qo'shiq bo'laklab ishlanadi (xotirani tejash uchun)
+STAGE_SCALE = 0.5       # oraliq saqlashda -6 dB zaxira
+
+
+def apply_8d_chunk(chunk: np.ndarray, sr: int, offset: int) -> np.ndarray:
+    """Ovoz boshni aylanib chiqqandek (teng quvvatli panning, ~8 soniyada bir aylanish).
+    chunk: (2, n) float32; offset: shu bo'lakning qo'shiq boshidan necha namunadan boshlanishi."""
+    n = chunk.shape[1]
+    mono = (chunk[0] + chunk[1]) * 0.5
+    t = (np.arange(n, dtype=np.float64) + offset) / sr
+    pan = np.sin(2 * np.pi * 0.125 * t).astype(np.float32)   # -1 (chap) .. +1 (o'ng)
+    angle = (pan + 1.0) * (np.pi / 4.0)                       # 0 .. pi/2
+    left = mono * np.cos(angle) * 1.35 + chunk[0] * 0.25
+    right = mono * np.sin(angle) * 1.35 + chunk[1] * 0.25
     return np.vstack([left, right]).astype(np.float32)
 
 
 def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
+    """Bo'laklab ishlov berish: xotira kam sarflanadi (Render bepul tarifi uchun muhim)."""
     sound = AudioSegment.from_file(in_path)
     if len(sound) > MAX_DURATION_SEC * 1000:
         raise TooLong()
@@ -279,37 +283,55 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
     sound = change_speed(sound, float(p.get("speed", 1.0)))
     sr = sound.frame_rate
 
-    samples = np.frombuffer(sound.raw_data, dtype=np.int16).reshape(-1, 2).T.astype(np.float32)
-    samples /= 32768.0
-    del sound
-    n_orig = samples.shape[1]
-    ref_rms = float(np.sqrt(np.mean(samples ** 2))) + 1e-9   # asl qo'shiq balandligi
+    data = np.frombuffer(sound.raw_data, dtype=np.int16).reshape(-1, 2)   # nusxasiz ko'rinish
+    n_total = data.shape[0]
+    step = sr * CHUNK_SEC
 
-    # reverb dumi (oxirida kesilib qolmasligi uchun) - 2 soniya jimlik
-    if p.get("reverb", 0) > 0:
-        samples = np.pad(samples, ((0, 0), (0, sr * 2)))
+    # 1) asl qo'shiq balandligi (RMS)
+    sumsq = 0.0
+    for i in range(0, n_total, step):
+        c = data[i:i + step].astype(np.float32) / 32768.0
+        sumsq += float(np.sum(c.astype(np.float64) ** 2))
+    ref_rms = (sumsq / (n_total * 2)) ** 0.5 + 1e-9
 
+    # 2) effektlar (bass > reverb > EQ > 8D), bo'laklab
     board = build_board(p)
-    if len(board) > 0:
-        samples = board(samples, sr)
+    tail = sr * 2 if p.get("reverb", 0) > 0 else 0        # reverb dumi uchun 2 soniya
+    out_len = n_total + tail
+    stage = np.empty((out_len, 2), dtype=np.int16)
+    sumsq2 = 0.0
+    for i in range(0, out_len, step):
+        j = min(i + step, out_len)
+        chunk = np.zeros((j - i, 2), dtype=np.float32)
+        real_end = min(j, n_total)
+        if real_end > i:
+            chunk[: real_end - i] = data[i:real_end].astype(np.float32) / 32768.0
+        chunk = np.ascontiguousarray(chunk.T)
+        if len(board) > 0:
+            chunk = board(chunk, sr, reset=False)
+        if p.get("is_8d"):
+            chunk = apply_8d_chunk(chunk, sr, i)
+        valid = max(0, real_end - i)
+        if valid:
+            sumsq2 += float(np.sum(chunk[:, :valid].astype(np.float64) ** 2))
+        stage[i:j] = (np.clip(chunk * STAGE_SCALE, -1.0, 1.0).T * 32767.0).astype(np.int16)
+    del data, sound
+    proc_rms = (sumsq2 / (n_total * 2)) ** 0.5 + 1e-9
 
-    if p.get("is_8d"):
-        samples = apply_8d(samples, sr)
+    # 3) balandlikni asl qo'shiqqa tenglashtirish + yumshoq limiter
+    gain = min(max(ref_rms / proc_rms, 0.25), 4.0)                  # -12 dB ... +12 dB
+    gain_total = gain / STAGE_SCALE
+    limiter = Pedalboard([Limiter(threshold_db=-1.5, release_ms=100.0)])
+    for i in range(0, out_len, step):
+        j = min(i + step, out_len)
+        c = stage[i:j].astype(np.float32) / 32768.0 * gain_total
+        c = np.ascontiguousarray(c.T)
+        c = limiter(c, sr, reset=False)
+        c = np.clip(c, -0.85, 0.85)                                  # mp3 uchun -1 dBFS zaxira
+        stage[i:j] = (c.T * 32767.0).astype(np.int16)
 
-    # Balandlikni asl qo'shiqqa tenglashtirish (effektlardan keyin tovush pasayib ketmasligi uchun)
-    proc_rms = float(np.sqrt(np.mean(samples[:, :n_orig] ** 2))) + 1e-9
-    gain = min(max(ref_rms / proc_rms, 0.25), 4.0)           # -12 dB ... +12 dB
-    samples = samples * gain
-    # kliplanishsiz: yumshoq limiter
-    samples = Pedalboard([Limiter(threshold_db=-1.5, release_ms=100.0)])(samples, sr)
-    peak = float(np.max(np.abs(samples))) if samples.size else 0.0
-    if peak > 0.89:                      # mp3 kodlashda oshib ketmasligi uchun -1 dBFS zaxira
-        samples *= 0.89 / peak
-
-    pcm = (samples.T * 32767.0).astype(np.int16).tobytes()
-    del samples
-    out = AudioSegment(pcm, frame_rate=sr, sample_width=2, channels=2)
-    del pcm
+    out = AudioSegment(stage.tobytes(), frame_rate=sr, sample_width=2, channels=2)
+    del stage
     out.export(out_path, format="mp3", bitrate=p.get("bitrate", "320k"))
     del out
 
