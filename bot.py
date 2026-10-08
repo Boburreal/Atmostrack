@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import numpy as np
 from pydub import AudioSegment
-from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter
+from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter, Limiter
 from mutagen.id3 import ID3, TIT2, TPE1, APIC, ID3NoHeaderError
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -48,16 +48,16 @@ EQ_LABELS = ["60 Hz", "170 Hz", "310 Hz", "600 Hz", "1 kHz", "3 kHz", "6 kHz", "
 
 # Standart rejimlar (bu qiymatlarni xohlasangiz shu yerdan o'zgartirasiz)
 # speed: 1.0 = asl tezlik | reverb: 0-100 % | bass: dB (-12..+12) | eq: 9 ta polosa dB
-BASE_EQ = [2, -4, -4, 0, 0, 2, 5, 7, 8]
+BASE_EQ = [2, -3, -3, 0, 0, 2, 5, 7, 8]   # EQ saytidagi standart sozlamangiz
 
 PRESETS = {
     "reverb": {
         "title": "Reverb",
-        "speed": 1.0, "reverb": 50, "bass": 0, "eq": BASE_EQ, "is_8d": False, "bitrate": "320k",
+        "speed": 1.0, "reverb": 45, "bass": 0, "eq": BASE_EQ, "is_8d": False, "bitrate": "320k",
     },
     "slowed": {
         "title": "Slowed + Reverb",
-        "speed": 0.6, "reverb": 40, "bass": 0, "eq": BASE_EQ, "is_8d": False, "bitrate": "320k",
+        "speed": 0.90, "reverb": 40, "bass": 0, "eq": [2, -4, -4, 0, 0, 2, 5, 7, 8], "is_8d": False, "bitrate": "320k",
     },
     "bass": {
         "title": "Bass Boost",
@@ -71,7 +71,7 @@ PRESETS = {
 
 DEFAULT_CUSTOM = {
     "title": "Qo'lda sozlash",
-    "speed": 1.0, "reverb": 50, "bass": 0, "eq": list(BASE_EQ), "is_8d": False, "bitrate": "320k",
+    "speed": 1.0, "reverb": 45, "bass": 0, "eq": list(BASE_EQ), "is_8d": False, "bitrate": "320k",
 }
 
 logging.basicConfig(level=logging.INFO)
@@ -235,13 +235,12 @@ def change_speed(sound: AudioSegment, speed: float) -> AudioSegment:
 
 
 def build_board(p: dict) -> Pedalboard:
+    """Tartib sizning qo'lda ishlash tartibingizdagidek:
+    1) bass va reverb (slowedandreverb.studio), 2) ekvalayzer (EQ sayti)."""
     board = Pedalboard([])
     bass = p.get("bass", 0)
     if bass != 0:
         board.append(LowShelfFilter(cutoff_frequency_hz=100, gain_db=float(bass), q=0.7))
-    for freq, gain in zip(EQ_BANDS, p.get("eq", [0] * 9)):
-        if gain != 0:
-            board.append(PeakFilter(cutoff_frequency_hz=freq, gain_db=float(gain), q=1.0))
     rev = p.get("reverb", 0)
     if rev > 0:
         wet = rev / 100.0
@@ -252,6 +251,9 @@ def build_board(p: dict) -> Pedalboard:
             dry_level=1 - wet * 0.5,
             width=1.0,
         ))
+    for freq, gain in zip(EQ_BANDS, p.get("eq", [0] * 9)):
+        if gain != 0:
+            board.append(PeakFilter(cutoff_frequency_hz=freq, gain_db=float(gain), q=1.0))
     return board
 
 
@@ -280,6 +282,8 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
     samples = np.frombuffer(sound.raw_data, dtype=np.int16).reshape(-1, 2).T.astype(np.float32)
     samples /= 32768.0
     del sound
+    n_orig = samples.shape[1]
+    ref_rms = float(np.sqrt(np.mean(samples ** 2))) + 1e-9   # asl qo'shiq balandligi
 
     # reverb dumi (oxirida kesilib qolmasligi uchun) - 2 soniya jimlik
     if p.get("reverb", 0) > 0:
@@ -292,10 +296,15 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
     if p.get("is_8d"):
         samples = apply_8d(samples, sr)
 
-    # kliplanishni oldini olish
+    # Balandlikni asl qo'shiqqa tenglashtirish (effektlardan keyin tovush pasayib ketmasligi uchun)
+    proc_rms = float(np.sqrt(np.mean(samples[:, :n_orig] ** 2))) + 1e-9
+    gain = min(max(ref_rms / proc_rms, 0.25), 4.0)           # -12 dB ... +12 dB
+    samples = samples * gain
+    # kliplanishsiz: yumshoq limiter
+    samples = Pedalboard([Limiter(threshold_db=-1.5, release_ms=100.0)])(samples, sr)
     peak = float(np.max(np.abs(samples))) if samples.size else 0.0
-    if peak > 0.98:
-        samples *= 0.98 / peak
+    if peak > 0.89:                      # mp3 kodlashda oshib ketmasligi uchun -1 dBFS zaxira
+        samples *= 0.89 / peak
 
     pcm = (samples.T * 32767.0).astype(np.int16).tobytes()
     del samples
@@ -321,6 +330,8 @@ def write_tags(path: str, title: str, artist: str):
     if os.path.exists(COVER_PATH):
         with open(COVER_PATH, "rb") as f:
             tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=f.read()))
+    else:
+        logger.warning("cover.jpg topilmadi! Muqova qo'yilmadi. GitHub'ga cover.jpg yuklang.")
     tags.save(path, v2_version=3)
 
 
