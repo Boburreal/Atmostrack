@@ -1,7 +1,7 @@
 """
 BS Track Remake Bot + Mini App
 - O'zbekcha salomlashish
-- 4 ta standart rejim: Reverb, Slowed+Reverb, Bass Boost, 8D
+- 3 ta standart rejim: Reverb, Slowed+Reverb, 8D (+ qo'lda sozlash)
 - To'liq qo'lda sozlash: tezlik, reverb, bass, 8D, 9 polosali EQ
 - Har safar nom so'raydi, oxiriga (BStrack) qo'shadi
 - Muqovani logotipga almashtiradi (eskisini o'chiradi)
@@ -62,23 +62,16 @@ PRESETS = {
         "title": "Slowed + Reverb", "desc": "Sekinlashgan, chuqur va xayolchan ovoz.",
         "speed": 0.90, "reverb": 40, "bass": 0, "sub": 0, "eq": [2, -4, -4, 0, 0, 2, 5, 7, 8], "is_8d": False, "bitrate": "320k",
     },
-    "bass": {
-        "title": "Bass Boost", "desc": "Kuchli va yumaloq past chastotalar.",
-        "speed": 1.0, "reverb": 25, "bass": 8, "sub": 0, "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
-    },
-    "lowbass": {
-        "title": "Lowbass", "desc": "Chuqur sub-bass (24 Hz): bass bir oktava pastga tushadi. Sekinlashtirilgan va 20% reverb bilan.",
-        "speed": 0.80, "reverb": 20, "bass": 3, "sub": 70, "eq": [0, 0, 0, 0, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
-    },
     "8d": {
         "title": "8D Audio", "desc": "Ovoz boshingiz atrofida aylanadi. Quloqchin bilan eshiting.",
         "speed": 1.0, "reverb": 22, "bass": 0, "sub": 0, "eq": [0, -1, -1, 0, 0, 1, 2, 2, 2], "is_8d": True, "bitrate": "320k",
     },
-    "pitchup": {
-        "title": "Pitch Up", "desc": "Tezroq va balandroq ton (nightcore uslubi).",
-        "speed": 1.15, "reverb": 15, "bass": 0, "sub": 0, "eq": [0, -1, -1, 0, 0, 1, 2, 3, 3], "is_8d": False, "bitrate": "320k",
-    },
 }
+
+# Olib tashlangan rejimlar (kerak bo'lsa PRESETS ichiga qaytarish mumkin):
+# lowbass: speed 0.80, reverb 20, bass 3, sub 70, eq nol
+# bass:    speed 1.0, reverb 25, bass 8, sub 0, eq [10, 8, 4, 1, 0, 0, 0, 0, 0]
+# pitchup: speed 1.15, reverb 15, bass 0, sub 0, eq [0, -1, -1, 0, 0, 1, 2, 3, 3]
 
 DEFAULT_CUSTOM = {
     "title": "Qo'lda sozlash",
@@ -857,10 +850,8 @@ GREETING = (
     "Originalini eshitgingiz kelmay qoladi 😁💯\n\n"
     "😉 Nimalar qila olaman:\n"
     "📌 Reverb va Slowed + Reverb, bu eng Top effekt 🚀\n"
-    "📌 Bass Boost va Lowbass, Kuchli bass va muloyim bass 🚀\n"
     "📌 8D Audio, tovush boshingiz atrofida aylanadi (quloqchin taqing!) 🚀\n"
-    "📌 Pitch Up, ovoz balandlashadi. Tezlik 🚀\n"
-    "📌 Qo'lda sozlash 🚀\n"
+    "📌 Qo'lda sozlash: tezlik, reverb, bass, sub-bass va ekvalayzer 🚀\n"
     "📌 Nomlash (Tag editor) 🚀\n\n"
     "‼️ Qo'shiq {minutes} daqiqadan oshmasin va {max_mb} MB dan katta bo'lmasin (bot ham charchaydi 😅).\n\n"
     "👀 Tez orada: ovozni olib tashlash (vocal remover), xonanda dam olib turadi 😄\n\n"
@@ -900,10 +891,7 @@ def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Reverb", callback_data="p:reverb"),
          InlineKeyboardButton("Slowed + Reverb", callback_data="p:slowed")],
-        [InlineKeyboardButton("Bass Boost", callback_data="p:bass"),
-         InlineKeyboardButton("Lowbass", callback_data="p:lowbass")],
-        [InlineKeyboardButton("8D Audio", callback_data="p:8d"),
-         InlineKeyboardButton("Pitch Up", callback_data="p:pitchup")],
+        [InlineKeyboardButton("8D Audio", callback_data="p:8d")],
         [InlineKeyboardButton("Qo'lda sozlash", callback_data="m:custom")],
         [InlineKeyboardButton("Bekor qilish", callback_data="n:cancel")],
     ])
