@@ -114,6 +114,7 @@ h2{font-family:var(--font-d);font-weight:500;font-size:14px;margin:26px 0 12px;c
 .more .btn{justify-content:space-between;padding:16px 18px}
 .more .btn span small{display:block;font-weight:500;color:var(--muted);font-size:12.5px;margin-top:2px}
 .more svg{width:18px;height:18px;flex:none}
+.more .btn + .btn{margin-top:10px}
 
 /* ---- qo'shimcha sozlamalar ---- */
 .ctl{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:14px 14px 12px;margin-bottom:10px}
@@ -229,6 +230,10 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
       <h2 style="margin-top:4px">Tayyor rejimlar</h2>
       <div class="presets" id="presetList"></div>
       <div class="more">
+        <button class="btn ghost" id="plainBtn" type="button">
+          <span>Effektsiz<small>Faqat nom va BStrack muqovasi, ovoz o'zgarmaydi</small></span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+        </button>
         <button class="btn ghost" id="openExtra" type="button">
           <span>Qo'shimcha sozlamalar<small>Tezlik, reverb, bass, sub-bass, 8D va ekvalayzer</small></span>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
@@ -435,6 +440,7 @@ function eqViz(eq){
   return w;
 }
 function chipsFor(p){
+  if (p.plain) return [['Ovoz o\'zgarmaydi', false], ['Nom + muqova', true]];
   var out = [['Tezlik '+p.speed.toFixed(2)+'x', p.speed!==1], ['Reverb '+p.reverb+'%', p.reverb>0], ['Bass '+fmtDb(p.bass), p.bass!==0]];
   if (p.sub>0) out.push(['Sub-bass '+p.sub+'%', true]);
   if (p.is_8d) out.push(['8D aylanish', true]);
@@ -539,8 +545,10 @@ $('spdPlus').addEventListener('click', function(){ haptic('light'); spdUpdate(+$
 function chooseParams(payload, shown, from){
   shown = Object.assign({}, shown);
   state.params = payload; state.shown = shown; state.from = from;
-  var isPreset = !!payload.preset;
+  var isPlain = payload.preset === 'plain';
+  var isPreset = !!payload.preset && !isPlain;
   $('speedBox').hidden = !isPreset;
+  $('prev-name').hidden = isPlain;
   if (isPreset){ delete payload.speed; spdUpdate(shown.speed); delete payload.speed; payload.speed = shown.speed; }
   $('sumTitle').textContent = shown.title;
   fillChips($('sumChips'), shown);
@@ -550,6 +558,10 @@ function chooseParams(payload, shown, from){
   $('nameErr').textContent = '';
   show('name');
 }
+$('plainBtn').addEventListener('click', function(){
+  haptic('medium');
+  chooseParams({preset:'plain'}, {plain:true, title:'Faqat nom va muqova', speed:1, reverb:0, bass:0, sub:0, eq:[0,0,0,0,0,0,0,0,0], is_8d:false}, 'presets');
+});
 $('nameInput').addEventListener('input', function(){ state.nameTouched = true; $('nameErr').textContent=''; });
 $('keepName').addEventListener('click', function(){ $('nameInput').value = baseName(state.file.name); state.nameTouched = true; haptic('light'); });
 $('startBtn').addEventListener('click', startJob);
