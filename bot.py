@@ -333,9 +333,10 @@ class Web(BaseHTTPRequestHandler):
                 return self._json(401, {"ok": False, "error": "telegram"})
             if not is_allowed(user["id"]):
                 self._notify_admin_once(user)
-                return self._json(200, {"ok": True, "allowed": False, "id": user["id"]})
+                return self._json(200, {"ok": True, "allowed": False, "id": user["id"], "expired": is_expired(user["id"])})
             return self._json(200, {"ok": True, "allowed": True, "id": user["id"],
-                                    "name": user.get("first_name", ""), "config": public_config()})
+                                    "name": user.get("first_name", ""), "days_left": sub_days_left(user["id"]),
+                                    "config": public_config()})
         if path.startswith("/api/job/"):
             user = self._user()
             if not user or not is_allowed(user["id"]):
@@ -479,9 +480,16 @@ def run_health():
     srv.serve_forever()
 
 
-# ====================== RUXSAT TIZIMI ======================
-# ADMIN_ID    - sizning Telegram ID raqamingiz (Environment'ga yoziladi)
-# ALLOWED_IDS - doimiy ruxsat berilganlar, vergul bilan: 111,222 (ixtiyoriy)
+# ====================== RUXSAT VA OBUNA TIZIMI ======================
+# ADMIN_ID    - sizning Telegram ID raqamingiz (cheksiz, doim ruxsat)
+# ALLOWED_IDS - doimiy ruxsat berilganlar, vergul bilan: 111,222 (cheksiz, ixtiyoriy)
+# Obuna: /add ID [kun] - shu kundan boshlab 30 kun (yoki ko'rsatilgan kun) ruxsat.
+# Obuna muddatlari doimiy saqlanishi uchun Supabase (bepul baza) ulanadi:
+#   SUPABASE_URL va SUPABASE_KEY (Render > Environment). Ulanmasa, vaqtinchalik fayl ishlatiladi
+#   (Render bepul tarifida qayta ishga tushganda o'chib ketadi).
+import urllib.request
+from datetime import datetime, timezone, timedelta
+
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
 if not ADMIN_ID:
     logger.warning("ADMIN_ID o'rnatilmagan! Faqat /myid ishlaydi.")
@@ -489,32 +497,99 @@ if not ADMIN_ID:
 ENV_ALLOWED = {
     int(x) for x in os.environ.get("ALLOWED_IDS", "").replace(" ", "").split(",") if x.isdigit()
 }
-ALLOWED_FILE = os.path.join(BASE_DIR, "allowed_users.json")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+USE_DB = bool(SUPABASE_URL and SUPABASE_KEY)
+SUBS_FILE = os.path.join(BASE_DIR, "subs.json")
+SUB_DAYS = 30
+SUBS = {}                      # user_id -> obuna tugash vaqti (epoch soniya)
+SUBS_LOCK = threading.Lock()
 _notified = set()
+_notice_sent = set()
+UZT = timezone(timedelta(hours=5))
 
 
-def load_dynamic() -> set:
+def fmt_date(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UZT).strftime("%d.%m.%Y")
+
+
+def _sb(method, path, body=None, extra=None):
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/rest/v1/{path}", method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+    )
+    req.add_header("apikey", SUPABASE_KEY)
+    req.add_header("Authorization", "Bearer " + SUPABASE_KEY)
+    req.add_header("Content-Type", "application/json")
+    for k, v in (extra or {}).items():
+        req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = r.read()
+        return json.loads(data) if data else None
+
+
+def load_subs() -> dict:
+    if USE_DB:
+        rows = _sb("GET", "subscribers?select=user_id,expires_at") or []
+        return {int(r["user_id"]): float(r["expires_at"]) for r in rows}
     try:
-        with open(ALLOWED_FILE, "r", encoding="utf-8") as f:
-            return {int(x) for x in json.load(f)}
+        with open(SUBS_FILE, "r", encoding="utf-8") as f:
+            return {int(k): float(v) for k, v in json.load(f).items()}
     except Exception:
-        return set()
+        return {}
 
 
-def save_dynamic(ids: set):
+def persist_sub(uid: int, exp):
+    """exp=None bo'lsa o'chiradi."""
+    if USE_DB:
+        if exp is None:
+            _sb("DELETE", f"subscribers?user_id=eq.{uid}")
+        else:
+            _sb("POST", "subscribers", {"user_id": uid, "expires_at": int(exp)},
+                {"Prefer": "resolution=merge-duplicates"})
+        return
+    with SUBS_LOCK:
+        data = {str(k): v for k, v in SUBS.items()}
     try:
-        with open(ALLOWED_FILE, "w", encoding="utf-8") as f:
-            json.dump(sorted(ids), f)
+        with open(SUBS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
     except Exception:
-        logger.exception("Ruxsat ro'yxatini saqlab bo'lmadi")
+        logger.exception("Obuna ro'yxatini saqlab bo'lmadi")
 
 
-def all_ids() -> set:
-    return ENV_ALLOWED | load_dynamic()
+def refresh_subs_loop():
+    """Har daqiqada bazadan yangilab turadi, shunda ruxsat tekshiruvi tez (xotiradan) ishlaydi."""
+    while True:
+        try:
+            fresh = load_subs()
+            with SUBS_LOCK:
+                SUBS.clear()
+                SUBS.update(fresh)
+        except Exception:
+            logger.exception("Obunalarni yuklab bo'lmadi (eski ro'yxat saqlanadi)")
+        time.sleep(60)
 
 
 def is_allowed(uid: int) -> bool:
-    return uid == ADMIN_ID or uid in all_ids()
+    if uid == ADMIN_ID or uid in ENV_ALLOWED:
+        return True
+    with SUBS_LOCK:
+        return SUBS.get(uid, 0) > time.time()
+
+
+def sub_days_left(uid: int):
+    """Obunachi uchun qolgan kun; admin va doimiy ruxsatlilar uchun None."""
+    if uid == ADMIN_ID or uid in ENV_ALLOWED:
+        return None
+    with SUBS_LOCK:
+        exp = SUBS.get(uid, 0)
+    return max(0, int((exp - time.time() + 86399) // 86400))
+
+
+def is_expired(uid: int) -> bool:
+    with SUBS_LOCK:
+        exp = SUBS.get(uid)
+    return exp is not None and exp <= time.time()
 
 
 async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -525,6 +600,12 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     if update.callback_query:
         await update.callback_query.answer("Sizda ruxsat yo'q.", show_alert=True)
     elif update.message:
+        if is_expired(user.id):
+            await update.message.reply_text(
+                "Obuna muddatingiz tugagan. Yangilash uchun admin'ga yozing.\n"
+                f"Sizning ID raqamingiz: {user.id}"
+            )
+            return False
         await update.message.reply_text(
             "Kechirasiz, sizda bu botdan foydalanish uchun hozircha ruxsat yo'q.\n"
             f"Sizning ID raqamingiz: {user.id}\n"
@@ -555,23 +636,78 @@ async def myid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Sizning ID raqamingiz: {update.effective_user.id}")
 
 
+def _parse_uid_days(args):
+    if not args or not args[0].isdigit():
+        return None, None
+    days = SUB_DAYS
+    if len(args) > 1:
+        if not args[1].isdigit() or not (1 <= int(args[1]) <= 3650):
+            return None, None
+        days = int(args[1])
+    return int(args[0]), days
+
+
+async def _store(uid: int, exp):
+    """Xotirani yangilaydi va bazaga yozadi. Baza xato bersa, False qaytaradi."""
+    with SUBS_LOCK:
+        if exp is None:
+            SUBS.pop(uid, None)
+        else:
+            SUBS[uid] = exp
+    try:
+        await asyncio.to_thread(persist_sub, uid, exp)
+        return True
+    except Exception:
+        logger.exception("Obunani bazaga yozib bo'lmadi")
+        return False
+
+
+DB_NOTE = (
+    "\n\n⚠️ Doimiy baza (Supabase) ulanmagan: bot qayta ishga tushsa, obuna muddatlari yo'qolishi mumkin."
+)
+
+
 @admin_only
 async def add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("Format: /add 123456789")
+    uid, days = _parse_uid_days(context.args)
+    if uid is None:
+        await update.message.reply_text(
+            "Format: /add 123456789 (30 kun)\nyoki: /add 123456789 7 (7 kun)")
         return
-    uid = int(context.args[0])
-    ids = load_dynamic()
-    ids.add(uid)
-    save_dynamic(ids)
-    await update.message.reply_text(
-        f"Ruxsat berildi: {uid}\n\n"
-        "Eslatma: bot qayta ishga tushsa, /add orqali qo'shilganlar o'chib ketishi mumkin. "
-        "Doimiy qilish uchun Environment > ALLOWED_IDS ga quyidagini yozing:\n"
-        f"{','.join(str(i) for i in sorted(all_ids()))}"
-    )
+    exp = time.time() + days * 86400          # shu kundan boshlab hisoblanadi
+    ok = await _store(uid, exp)
+    msg = f"Obuna berildi: {uid}\nMuddati: {days} kun, {fmt_date(exp)} gacha."
+    if not ok:
+        msg += "\n⚠️ Bazaga yozishda xato bo'ldi, loglarni tekshiring."
+    elif not USE_DB:
+        msg += DB_NOTE
+    await update.message.reply_text(msg)
     try:
-        await context.bot.send_message(uid, "Sizga botdan foydalanishga ruxsat berildi. /start ni bosing.")
+        await context.bot.send_message(
+            uid, f"Sizga botdan foydalanish uchun {days} kunlik obuna berildi ({fmt_date(exp)} gacha). "
+                 "/start ni bosing.")
+    except Exception:
+        pass
+
+
+@admin_only
+async def extend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid, days = _parse_uid_days(context.args)
+    if uid is None:
+        await update.message.reply_text("Format: /extend 123456789 (30 kun qo'shadi)\nyoki: /extend 123456789 15")
+        return
+    with SUBS_LOCK:
+        base = max(SUBS.get(uid, 0), time.time())    # tugagan bo'lsa bugundan, aks holda tugash sanasidan
+    exp = base + days * 86400
+    ok = await _store(uid, exp)
+    msg = f"Uzaytirildi: {uid}\nYangi muddat: {fmt_date(exp)} gacha."
+    if not ok:
+        msg += "\n⚠️ Bazaga yozishda xato bo'ldi, loglarni tekshiring."
+    elif not USE_DB:
+        msg += DB_NOTE
+    await update.message.reply_text(msg)
+    try:
+        await context.bot.send_message(uid, f"Obunangiz uzaytirildi: {fmt_date(exp)} gacha.")
     except Exception:
         pass
 
@@ -582,9 +718,7 @@ async def remove_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Format: /remove 123456789")
         return
     uid = int(context.args[0])
-    ids = load_dynamic()
-    ids.discard(uid)
-    save_dynamic(ids)
+    await _store(uid, None)
     msg = f"Ruxsat olib tashlandi: {uid}"
     if uid in ENV_ALLOWED:
         msg += "\n(Bu ID Environment'dagi ALLOWED_IDS ichida ham bor, uni o'sha yerdan ham o'chiring.)"
@@ -593,11 +727,73 @@ async def remove_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ids = sorted(all_ids())
-    if not ids:
+    now = time.time()
+    with SUBS_LOCK:
+        subs = sorted(SUBS.items(), key=lambda kv: kv[1])
+    lines = []
+    for uid, exp in subs:
+        left = int((exp - now + 86399) // 86400)
+        lines.append(f"{uid}: {fmt_date(exp)} gacha ({left} kun qoldi)" if exp > now
+                     else f"{uid}: tugagan ({fmt_date(exp)})")
+    if ENV_ALLOWED:
+        lines.append("Doimiy (cheksiz): " + ", ".join(str(i) for i in sorted(ENV_ALLOWED)))
+    if not lines:
         await update.message.reply_text("Hozircha faqat siz (admin) ruxsatga egasiz.")
         return
-    await update.message.reply_text("Ruxsat berilganlar:\n" + "\n".join(str(i) for i in ids))
+    await update.message.reply_text("Obunalar:\n" + "\n".join(lines) + ("" if USE_DB else DB_NOTE))
+
+
+async def obuna_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid == ADMIN_ID or uid in ENV_ALLOWED:
+        await update.message.reply_text("Sizda cheksiz ruxsat bor.")
+        return
+    with SUBS_LOCK:
+        exp = SUBS.get(uid)
+    if exp and exp > time.time():
+        await update.message.reply_text(f"Obunangiz {fmt_date(exp)} gacha amal qiladi ({sub_days_left(uid)} kun qoldi).")
+    elif exp:
+        await update.message.reply_text(f"Obuna muddatingiz {fmt_date(exp)} da tugagan. Yangilash uchun admin'ga yozing.")
+    else:
+        await update.message.reply_text("Sizda obuna yo'q. Ruxsat olish uchun ID raqamingizni admin'ga yuboring: " + str(uid))
+
+
+async def subs_watcher(app):
+    """Obuna tugashiga 3 kun qolganda va tugaganda foydalanuvchi hamda admin'ga xabar beradi."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            now = time.time()
+            with SUBS_LOCK:
+                snapshot = dict(SUBS)
+            for uid, exp in snapshot.items():
+                left = exp - now
+                if 0 < left < 3 * 86400 and (uid, exp, "soon") not in _notice_sent:
+                    _notice_sent.add((uid, exp, "soon"))
+                    try:
+                        await app.bot.send_message(
+                            uid, f"Obunangiz {fmt_date(exp)} da tugaydi. Davom ettirish uchun admin'ga yozing.")
+                    except Exception:
+                        pass
+                    if ADMIN_ID:
+                        try:
+                            await app.bot.send_message(ADMIN_ID, f"Obunasi tugayapti: {uid} ({fmt_date(exp)}). /extend {uid}")
+                        except Exception:
+                            pass
+                elif left <= 0 and now - exp < 7 * 86400 and (uid, exp, "end") not in _notice_sent:
+                    _notice_sent.add((uid, exp, "end"))
+                    try:
+                        await app.bot.send_message(uid, "Obuna muddatingiz tugadi. Yangilash uchun admin'ga yozing.")
+                    except Exception:
+                        pass
+                    if ADMIN_ID:
+                        try:
+                            await app.bot.send_message(ADMIN_ID, f"Obuna tugadi: {uid}. Yangilash: /extend {uid}")
+                        except Exception:
+                            pass
+        except Exception:
+            logger.exception("Obuna kuzatuvchisida xato")
+        await asyncio.sleep(3600)
 
 
 # ====================== AUDIO ISHLOV ======================
@@ -1427,6 +1623,7 @@ async def _post_init(app):
     global BOT_APP, BOT_LOOP
     BOT_APP = app
     BOT_LOOP = asyncio.get_running_loop()
+    asyncio.create_task(subs_watcher(app))
     url = webapp_url()
     if url.startswith("https://"):
         try:
@@ -1437,6 +1634,7 @@ async def _post_init(app):
 
 
 def main():
+    threading.Thread(target=refresh_subs_loop, daemon=True).start()
     threading.Thread(target=run_health, daemon=True).start()
 
     app = (
@@ -1452,6 +1650,8 @@ def main():
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("myid", myid_cmd))
     app.add_handler(CommandHandler("add", add_cmd))
+    app.add_handler(CommandHandler("extend", extend_cmd))
+    app.add_handler(CommandHandler("obuna", obuna_cmd))
     app.add_handler(CommandHandler("remove", remove_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(MessageHandler(filters.AUDIO | filters.Document.AUDIO, redirect_to_studio))
