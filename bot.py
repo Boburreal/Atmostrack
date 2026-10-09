@@ -80,6 +80,9 @@ DEFAULT_CUSTOM = {
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bsbot")
+# httpx har bir so'rovni (ichida bot tokeni bilan) logga yozmasin
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
@@ -101,6 +104,8 @@ BOT_LOOP = None                      # botning asyncio sikli
 WEB_MAX_BYTES = 25 * 1024 * 1024
 JOBS = {}                            # job_id -> dict
 JOBS_LOCK = threading.Lock()
+UPLOADS = {}                         # upload_id -> {uid, path, dir, t}
+PREVIEW_SEC = 25                     # namuna uzunligi (asl qo'shiqdan)
 _web_notified = set()
 
 
@@ -173,14 +178,59 @@ def _set_job(job_id, **kw):
             JOBS[job_id].update(kw)
 
 
+def _rm(path):
+    import shutil
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def _cleanup_jobs():
     now = time.time()
     with JOBS_LOCK:
         for k in [k for k, v in JOBS.items() if now - v["t"] > 3600]:
-            JOBS.pop(k, None)
+            _rm(JOBS.pop(k, {}).get("dir", "/nonexistent"))
+        for k in [k for k, v in UPLOADS.items() if now - v["t"] > 3600]:
+            _rm(UPLOADS.pop(k, {}).get("dir", "/nonexistent"))
 
 
-def run_web_job(job_id, uid, in_path, params, full_name):
+def _drop_user_uploads(uid):
+    with JOBS_LOCK:
+        for k in [k for k, v in UPLOADS.items() if v["uid"] == uid]:
+            _rm(UPLOADS.pop(k)["dir"])
+
+
+def run_web_preview(job_id, in_path, params, tmpdir):
+    """Qo'shiqning bir bo'lagini (PREVIEW_SEC soniya) xuddi yakuniy ishlov bilan qayta ishlaydi."""
+    import subprocess
+    try:
+        _set_job(job_id, status="queued")
+        with RENDER_LOCK:
+            _set_job(job_id, status="processing")
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", in_path],
+                capture_output=True, text=True, timeout=60)
+            dur = float(probe.stdout.strip() or 0)
+            start = max(0.0, min(dur * 0.35, dur - PREVIEW_SEC))
+            clip = os.path.join(tmpdir, "clip.wav")
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", str(PREVIEW_SEC), "-i", in_path,
+                 "-vn", "-ac", "2", "-ar", "44100", clip],
+                check=True, timeout=120)
+            out_path = os.path.join(tmpdir, "preview.mp3")
+            p = dict(params)
+            p["bitrate"] = "128k"
+            p["preview"] = True
+            render_in_subprocess(clip, out_path, p, "Namuna", "", min(RENDER_TIMEOUT, 300))
+        _set_job(job_id, status="done", audio=out_path)
+    except RenderTimeout:
+        _set_job(job_id, status="error", message="Namuna uzoq davom etdi. Qaytadan urinib ko'ring.")
+    except RenderKilled:
+        _set_job(job_id, status="error", message="Server xotirasi yetmadi. Qaytadan urinib ko'ring.")
+    except Exception:
+        logger.exception("Namuna tayyorlashda xatolik")
+        _set_job(job_id, status="error", message="Namunani tayyorlab bo'lmadi. Qaytadan urinib ko'ring.")
+
+
+def run_web_job(job_id, uid, in_path, params, full_name, upload_id=None):
     artist, title = split_name(full_name)
     tmpdir = os.path.dirname(in_path)
     try:
@@ -208,6 +258,11 @@ def run_web_job(job_id, uid, in_path, params, full_name):
 
         asyncio.run_coroutine_threadsafe(_send(), BOT_LOOP).result(timeout=420)
         _set_job(job_id, status="done")
+        if upload_id:
+            with JOBS_LOCK:
+                up = UPLOADS.pop(upload_id, None)
+            if up:
+                _rm(up["dir"])
     except TooLong:
         _set_job(job_id, status="error", message=f"Qo'shiq juda uzun. {MAX_MINUTES} daqiqagacha qabul qilinadi.")
     except RenderTimeout:
@@ -218,11 +273,7 @@ def run_web_job(job_id, uid, in_path, params, full_name):
         logger.exception("Web ishlovida xatolik")
         _set_job(job_id, status="error", message="Ishlov berishda xatolik yuz berdi. Boshqa fayl bilan urinib ko'ring.")
     finally:
-        try:
-            import shutil
-            shutil.rmtree(tmpdir, ignore_errors=True)
-        except Exception:
-            pass
+        _rm(tmpdir)
 
 
 class Web(BaseHTTPRequestHandler):
@@ -289,11 +340,19 @@ class Web(BaseHTTPRequestHandler):
             user = self._user()
             if not user or not is_allowed(user["id"]):
                 return self._json(403, {"ok": False})
+            parts = path.split("/")          # ['', 'api', 'job', id, ('audio')]
+            want_audio = len(parts) == 5 and parts[4] == "audio"
             with JOBS_LOCK:
-                job = JOBS.get(path.rsplit("/", 1)[-1])
+                job = JOBS.get(parts[3])
                 if not job or job["uid"] != user["id"]:
                     return self._json(404, {"ok": False})
-                return self._json(200, {"ok": True, "status": job["status"], "message": job.get("message", "")})
+                snap = dict(job)
+            if want_audio:
+                if snap.get("status") != "done" or not snap.get("audio") or not os.path.exists(snap["audio"]):
+                    return self._json(404, {"ok": False})
+                with open(snap["audio"], "rb") as f:
+                    return self._send(200, f.read(), "audio/mpeg")
+            return self._json(200, {"ok": True, "status": snap["status"], "message": snap.get("message", "")})
         self._send(404, b"Not found", "text/plain; charset=utf-8")
 
     def _notify_admin_once(self, user):
@@ -304,61 +363,111 @@ class Web(BaseHTTPRequestHandler):
                     f"ID: {uid}\n\nRuxsat berish: /add {uid}")
             asyncio.run_coroutine_threadsafe(BOT_APP.bot.send_message(ADMIN_ID, text), BOT_LOOP)
 
-    def do_POST(self):
-        path = self.path.split("?", 1)[0]
-        if path != "/api/render":
-            return self._send(404, b"Not found", "text/plain; charset=utf-8")
+    def _auth_post(self):
         user = self._user()
         if not user:
-            return self._json(401, {"ok": False, "error": "Telegram ichida oching."})
+            self._json(401, {"ok": False, "error": "Telegram ichida oching."})
+            return None
         if not is_allowed(user["id"]):
-            return self._json(403, {"ok": False, "error": "Sizda ruxsat yo'q."})
+            self._json(403, {"ok": False, "error": "Sizda ruxsat yo'q."})
+            return None
+        return user
 
+    def _length(self):
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            return int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            length = 0
-        if length <= 0:
-            return self._json(400, {"ok": False, "error": "Fayl yuborilmadi."})
-        if length > WEB_MAX_BYTES:
-            return self._json(413, {"ok": False, "error": f"Fayl juda katta ({WEB_MAX_BYTES // (1024 * 1024)} MB gacha)."})
+            return 0
 
-        _cleanup_jobs()
+    def _busy(self, uid, kind):
         with JOBS_LOCK:
-            busy = [j for j in JOBS.values() if j["uid"] == user["id"] and j["status"] in ("queued", "processing", "sending")]
-        if busy:
-            return self._json(429, {"ok": False, "error": "Oldingi qo'shiq hali ishlanmoqda. Tugashini kuting."})
+            return any(j["uid"] == uid and j["kind"] == kind and j["status"] in ("queued", "processing", "sending")
+                       for j in JOBS.values())
 
+    def _read_body_to(self, path, length):
+        remaining = length
+        with open(path, "wb") as f:
+            while remaining > 0:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    raise ConnectionError("upload uzildi")
+                f.write(chunk)
+                remaining -= len(chunk)
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path not in ("/api/render", "/api/upload", "/api/preview"):
+            return self._send(404, b"Not found", "text/plain; charset=utf-8")
+        user = self._auth_post()
+        if not user:
+            return
+        uid = user["id"]
+        _cleanup_jobs()
+
+        # ---- fayl yuklash (bir marta; keyin namuna va yakuniy ishlov shu fayldan foydalanadi)
+        if path == "/api/upload":
+            length = self._length()
+            if length <= 0:
+                return self._json(400, {"ok": False, "error": "Fayl yuborilmadi."})
+            if length > WEB_MAX_BYTES:
+                return self._json(413, {"ok": False, "error": f"Fayl juda katta ({WEB_MAX_BYTES // (1024 * 1024)} MB gacha)."})
+            import tempfile as _tf
+            _drop_user_uploads(uid)
+            tmpdir = _tf.mkdtemp(prefix="up_")
+            in_path = os.path.join(tmpdir, "input")
+            try:
+                self._read_body_to(in_path, length)
+            except Exception:
+                _rm(tmpdir)
+                return self._json(400, {"ok": False, "error": "Fayl yuklanmadi. Qaytadan urinib ko'ring."})
+            upload_id = uuid.uuid4().hex
+            with JOBS_LOCK:
+                UPLOADS[upload_id] = {"uid": uid, "path": in_path, "dir": tmpdir, "t": time.time()}
+            return self._json(200, {"ok": True, "upload": upload_id})
+
+        # ---- umumiy: yuklangan fayl va sozlamalar
+        with JOBS_LOCK:
+            up = UPLOADS.get(self.headers.get("X-Upload", ""))
+            up = dict(up) if up and up["uid"] == uid else None
+        if not up:
+            return self._json(410, {"ok": False, "error": "Fayl muddati tugagan. Qo'shiqni qaytadan tanlang.", "expired": True})
         try:
             params = sanitize_params(json.loads(unquote(self.headers.get("X-Params", "{}"))))
-            raw_name = unquote(self.headers.get("X-Name", "")).strip()
         except Exception:
             return self._json(400, {"ok": False, "error": "Sozlamalar noto'g'ri."})
-        if not raw_name or len(raw_name) > 100:
-            return self._json(400, {"ok": False, "error": "Nom 1 dan 100 belgigacha bo'lsin."})
+        upload_id = self.headers.get("X-Upload", "")
 
         import tempfile as _tf
+        # ---- namuna
+        if path == "/api/preview":
+            if self._busy(uid, "preview"):
+                return self._json(429, {"ok": False, "error": "Oldingi namuna tayyorlanmoqda."})
+            tmpdir = _tf.mkdtemp(prefix="pv_")
+            job_id = uuid.uuid4().hex
+            with JOBS_LOCK:
+                JOBS[job_id] = {"uid": uid, "kind": "preview", "status": "queued", "t": time.time(), "dir": tmpdir}
+            threading.Thread(target=run_web_preview, args=(job_id, up["path"], params, tmpdir), daemon=True).start()
+            return self._json(202, {"ok": True, "job": job_id})
+
+        # ---- yakuniy ishlov
+        if self._busy(uid, "render"):
+            return self._json(429, {"ok": False, "error": "Oldingi qo'shiq hali ishlanmoqda. Tugashini kuting."})
+        raw_name = unquote(self.headers.get("X-Name", "")).strip()
+        if not raw_name or len(raw_name) > 100:
+            return self._json(400, {"ok": False, "error": "Nom 1 dan 100 belgigacha bo'lsin."})
+        import shutil
         tmpdir = _tf.mkdtemp(prefix="web_")
         in_path = os.path.join(tmpdir, "input")
         try:
-            remaining = length
-            with open(in_path, "wb") as f:
-                while remaining > 0:
-                    chunk = self.rfile.read(min(65536, remaining))
-                    if not chunk:
-                        raise ConnectionError("upload uzildi")
-                    f.write(chunk)
-                    remaining -= len(chunk)
+            shutil.copyfile(up["path"], in_path)
         except Exception:
-            import shutil
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            return self._json(400, {"ok": False, "error": "Fayl yuklanmadi. Qaytadan urinib ko'ring."})
-
+            _rm(tmpdir)
+            return self._json(410, {"ok": False, "error": "Fayl muddati tugagan. Qo'shiqni qaytadan tanlang.", "expired": True})
         job_id = uuid.uuid4().hex
         with JOBS_LOCK:
-            JOBS[job_id] = {"uid": user["id"], "status": "queued", "t": time.time()}
+            JOBS[job_id] = {"uid": uid, "kind": "render", "status": "queued", "t": time.time(), "dir": tmpdir}
         threading.Thread(
-            target=run_web_job, args=(job_id, user["id"], in_path, params, with_tag(raw_name)), daemon=True
+            target=run_web_job, args=(job_id, uid, in_path, params, with_tag(raw_name), upload_id), daemon=True
         ).start()
         self._json(202, {"ok": True, "job": job_id})
 
@@ -756,7 +865,8 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
     out.export(out_path, format="mp3", bitrate=p.get("bitrate", "320k"))
     del out
 
-    write_tags(out_path, title, artist)
+    if not p.get("preview"):
+        write_tags(out_path, title, artist)
 
 
 class RenderTimeout(Exception):
