@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>BS Track Remake</title>
+<meta name="theme-color" content="#0e1014">
+<link rel="icon" href="/cover_thumb.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Unbounded:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#0e1014;          /* grafit */
+  --panel:#171a21;       /* yuza */
+  --panel-2:#1e222b;
+  --line:#2a2f3a;        /* po'lat chiziq */
+  --text:#eceff5;
+  --muted:#98a1b3;
+  --violet:#9d6bff;
+  --cyan:#33d6ff;
+  --copper:#d9a273;
+  --danger:#ff7a8a;
+  --grad:linear-gradient(90deg,var(--violet),var(--cyan));
+  --r-lg:20px; --r-md:14px; --r-sm:10px;
+  --font-d:'Unbounded','Manrope',system-ui,sans-serif;
+  --font-b:'Manrope',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-b);font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+body{min-height:100vh;min-height:100dvh;background:
+  radial-gradient(120% 60% at 100% -10%,rgba(157,107,255,.16),transparent 60%),
+  radial-gradient(90% 50% at -10% 0%,rgba(51,214,255,.10),transparent 55%),var(--bg);background-attachment:fixed}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.app{max-width:520px;margin:0 auto;padding:0 16px;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column}
+
+/* ---- sarlavha ---- */
+header{display:flex;align-items:center;gap:12px;padding:calc(env(safe-area-inset-top) + 14px) 0 10px}
+.logo{width:40px;height:40px;border-radius:50%;object-fit:cover;box-shadow:0 0 0 1.5px var(--line),0 0 18px rgba(157,107,255,.35);flex:none}
+.brand{font-family:var(--font-d);font-weight:500;font-size:15px;letter-spacing:.01em;line-height:1.1}
+.brand small{display:block;font-family:var(--font-b);font-weight:500;font-size:12px;color:var(--muted);margin-top:3px;letter-spacing:0}
+.back{margin-left:auto;display:none;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:8px 14px 8px 10px;font-weight:600;font-size:14px}
+.back svg{width:16px;height:16px}
+.back.on{display:inline-flex}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:4px 0 22px}
+.steps i{height:3px;border-radius:2px;background:var(--line);transition:background .3s}
+.steps i.on{background:var(--grad)}
+
+/* ---- ekranlar ---- */
+main{flex:1;display:flex;flex-direction:column}
+.screen{display:none;flex:1;flex-direction:column;padding-bottom:calc(env(safe-area-inset-bottom) + 96px)}
+.screen.on{display:flex}
+h1{font-family:var(--font-d);font-weight:500;font-size:22px;line-height:1.2;margin:0 0 8px;letter-spacing:-.01em}
+.lead{color:var(--muted);margin:0 0 20px;font-size:15px;max-width:44ch}
+h2{font-family:var(--font-d);font-weight:500;font-size:14px;margin:26px 0 12px;color:var(--text)}
+
+/* ---- fayl tanlash ---- */
+.pick{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;
+  background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:var(--r-lg);padding:34px 20px;width:100%}
+.pick:active{transform:scale(.99)}
+.pick .ring{width:84px;height:84px;border-radius:50%;padding:3px;background:conic-gradient(from 210deg,var(--violet),var(--cyan),var(--violet));display:grid;place-items:center}
+.pick .ring span{width:100%;height:100%;border-radius:50%;background:var(--bg);display:grid;place-items:center}
+.pick svg{width:30px;height:30px;stroke:var(--text)}
+.pick b{font-size:17px;font-weight:700}
+.pick em{font-style:normal;color:var(--muted);font-size:13.5px}
+.sub{display:inline-block;margin:-8px 0 16px;padding:4px 12px;border-radius:999px;font-size:13px;font-weight:600;border:1px solid var(--line);color:var(--muted)}
+.sub.warn{color:var(--copper);border-color:rgba(217,162,115,.5)}
+.file-ok{display:none;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-top:14px}
+.file-ok.on{display:flex}
+.idbox{display:none;margin-top:12px}
+.idbox.on{display:block}
+.idres{display:none;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-top:10px}
+.idres.on{display:flex}
+.idres img{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#1a1d26;flex:none}
+.idres .t{font-weight:700;font-size:15px;overflow:hidden;text-overflow:ellipsis}
+.idres .a{color:var(--muted);font-size:13px}
+.idmsg{color:var(--muted);font-size:13px;margin-top:8px;min-height:18px}
+.file-ok .fn{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-ok .fs{color:var(--muted);font-size:12.5px}
+.file-ok > div{min-width:0}
+.soon{display:flex;align-items:center;gap:12px;margin-top:22px;padding:14px;border-radius:var(--r-md);border:1px dashed var(--line);color:var(--muted);font-size:14px}
+.soon b{color:var(--text);font-weight:600}
+
+/* ---- tayyor rejimlar ---- */
+.presets{display:grid;gap:12px}
+.preset{display:grid;grid-template-columns:1fr auto;gap:6px 14px;text-align:left;width:100%;padding:16px;border-radius:var(--r-lg);
+  background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);transition:border-color .2s,transform .12s}
+.preset:hover{border-color:#3a4150}
+.preset:active{transform:scale(.99);border-color:var(--violet)}
+.preset .t{font-family:var(--font-d);font-weight:500;font-size:15px}
+.preset .d{grid-column:1;color:var(--muted);font-size:13.5px;line-height:1.4}
+.preset .eq{grid-column:2;grid-row:1 / span 2;align-self:center}
+.chips{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font-size:12.5px;font-weight:600;color:var(--text);background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+.chip.hot{border-color:rgba(157,107,255,.55);color:#d9c8ff}
+.eq{position:relative;display:flex;gap:3px;height:34px;align-items:stretch}
+.eq::after{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--line)}
+.eq b{position:relative;width:5px}
+.eq b i{position:absolute;left:0;right:0;border-radius:2px;background:var(--grad)}
+.eq b i.up{bottom:50%}
+.eq b i.dn{top:50%;opacity:.55}
+
+/* ---- tugmalar ---- */
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;border:0;border-radius:var(--r-md);padding:15px 18px;font-weight:700;font-size:16px}
+.btn.primary{background:var(--grad);color:#0b0d12}
+.btn.primary:disabled{opacity:.4;cursor:not-allowed}
+.btn.ghost{background:var(--panel);border:1px solid var(--line)}
+.btn:active:not(:disabled){transform:scale(.99)}
+.bar{position:fixed;left:0;right:0;bottom:0;padding:12px 16px calc(env(safe-area-inset-bottom) + 12px);background:linear-gradient(180deg,transparent,var(--bg) 38%);}
+.bar > div{max-width:520px;margin:0 auto;display:grid;gap:10px}
+.more{margin-top:14px}
+.more .btn{justify-content:space-between;padding:16px 18px}
+.more .btn span small{display:block;font-weight:500;color:var(--muted);font-size:12.5px;margin-top:2px}
+.more svg{width:18px;height:18px;flex:none}
+
+/* ---- qo'shimcha sozlamalar ---- */
+.ctl{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:14px 14px 12px;margin-bottom:10px}
+.ctl .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.ctl .row label{font-weight:700;font-size:15px}
+.ctl .row output{font-weight:700;font-variant-numeric:tabular-nums;color:#d9c8ff}
+.ctl .hint{color:var(--muted);font-size:12.5px;margin:-4px 0 10px}
+.slide{display:grid;grid-template-columns:38px 1fr 38px;gap:10px;align-items:center}
+.step{height:38px;border-radius:50%;border:1px solid var(--line);background:var(--panel-2);font-size:20px;line-height:1;display:grid;place-items:center;padding:0}
+.step:active{border-color:var(--cyan)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:30px;background:transparent;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:5px;border-radius:3px;background:linear-gradient(90deg,var(--violet),var(--cyan)) 0/var(--p,50%) 100% no-repeat,var(--line)}
+input[type=range]::-moz-range-track{height:5px;border-radius:3px;background:var(--line)}
+input[type=range]::-moz-range-progress{height:5px;border-radius:3px;background:var(--violet)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:var(--text);border:3px solid var(--bg);box-shadow:0 0 0 1.5px var(--cyan);margin-top:-8.5px}
+input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--text);border:3px solid var(--bg);box-shadow:0 0 0 1.5px var(--cyan)}
+.switch{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;background:none;border:0;padding:0;text-align:left}
+.switch .tx b{display:block;font-size:15px}
+.switch .tx span{color:var(--muted);font-size:12.5px}
+.tg{width:50px;height:30px;border-radius:999px;background:var(--line);position:relative;flex:none;transition:background .2s}
+.tg::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:var(--text);transition:transform .2s}
+.switch[aria-checked=true] .tg{background:var(--violet)}
+.switch[aria-checked=true] .tg::after{transform:translateX(20px)}
+.eqrow{display:grid;grid-template-columns:54px 1fr 54px;gap:8px;align-items:center}
+.eqrow span{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.eqrow output{text-align:right;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.link{background:none;border:0;color:var(--cyan);font-weight:600;padding:8px 0;font-size:14px}
+
+/* ---- nom ---- */
+.field{display:flex;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:4px 6px 4px 14px;gap:8px}
+.field:focus-within{border-color:var(--violet)}
+.field input{flex:1;min-width:0;background:none;border:0;color:var(--text);font:inherit;font-size:16px;padding:12px 0;outline:0}
+.field .tag{flex:none;color:var(--copper);font-weight:700;font-size:14px;background:rgba(217,162,115,.1);border-radius:8px;padding:6px 10px}
+.summary{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:14px}
+.summary .t{font-family:var(--font-d);font-weight:500;font-size:14px;margin-bottom:8px}
+#speedBox{margin-top:14px}
+.prev{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:12px}
+.prev .btn{padding:12px 16px;font-size:15px}
+.prev .pmsg{color:var(--muted);font-size:13px;margin:8px 2px 0;min-height:1.2em}
+.prev audio{display:block;width:100%;margin-top:10px;height:40px}
+.prev audio[hidden]{display:none}
+.err{color:var(--danger);font-size:14px;margin:12px 0 0;min-height:1em}
+
+/* ---- jarayon ---- */
+.center{align-items:center;justify-content:center;text-align:center;gap:6px}
+.dial{position:relative;width:196px;height:196px;margin:8px auto 26px}
+.dial .spin{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,var(--violet),var(--cyan),transparent 60%,var(--violet));-webkit-mask:radial-gradient(circle,transparent 86%,#000 87%);mask:radial-gradient(circle,transparent 86%,#000 87%);animation:spin 2.4s linear infinite}
+.dial.done .spin{animation:none;background:var(--grad)}
+.dial.fail .spin{animation:none;background:var(--danger)}
+.dial img{position:absolute;inset:12px;width:calc(100% - 24px);height:calc(100% - 24px);border-radius:50%;object-fit:cover}
+@keyframes spin{to{transform:rotate(360deg)}}
+.wave{display:flex;gap:4px;align-items:center;justify-content:center;height:34px;margin:2px 0 18px}
+.wave i{width:4px;height:100%;border-radius:2px;background:var(--grad);transform:scaleY(.2);animation:eqb 1.1s ease-in-out infinite}
+@keyframes eqb{0%,100%{transform:scaleY(.2)}50%{transform:scaleY(1)}}
+.stay{color:var(--muted);font-size:13.5px;max-width:34ch;margin:8px auto 0}
+.pct{font-variant-numeric:tabular-nums}
+
+.lock .id{display:inline-block;margin:10px 0;padding:8px 14px;border-radius:10px;background:var(--panel);border:1px solid var(--line);font-weight:700;font-variant-numeric:tabular-nums}
+.toast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);background:var(--panel-2);border:1px solid var(--line);padding:10px 16px;border-radius:999px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.on{opacity:1}
+@media (prefers-reduced-motion:reduce){.dial .spin,.wave i{animation:none}.wave i{transform:scaleY(.6)}*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <img class="logo" src="/cover_thumb.jpg" alt="BS Track logotipi" width="40" height="40">
+    <div class="brand">BS Track Remake<small>Qo'shiqni yangicha ovozga keltiring</small></div>
+    <button class="back" id="backBtn" type="button" aria-label="Orqaga qaytish">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>Orqaga
+    </button>
+  </header>
+  <div class="steps" id="steps" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+  <main>
+    <!-- 0. yuklanmoqda -->
+    <section class="screen center on" id="s-boot"><div class="stay" id="bootMsg">Yuklanmoqda…</div></section>
+
+    <!-- ruxsat yo'q / Telegram tashqarisida -->
+    <section class="screen center lock" id="s-lock">
+      <h1 id="lockTitle">Ruxsat kerak</h1>
+      <p class="lead" id="lockText" style="margin-inline:auto"></p>
+      <div class="id" id="lockId" hidden></div>
+    </section>
+
+    <!-- 1. fayl -->
+    <section class="screen" id="s-file">
+      <h1>Qo'shiqni tanlang</h1>
+      <p class="lead">Telefoningizdan audio fayl tanlang. Keyingi qadamda effektni tanlaysiz.</p>
+      <p class="sub" id="subInfo" hidden></p>
+      <button class="pick" id="pickBtn" type="button">
+        <span class="ring"><span><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg></span></span>
+        <b>Audio faylni tanlash</b>
+        <em id="limits">mp3, m4a, wav</em>
+      </button>
+      <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.wav,.flac,.ogg,.aac" hidden>
+      <div class="file-ok" id="fileOk">
+        <div><div class="fn" id="fn"></div><div class="fs" id="fs"></div></div>
+      </div>
+      <div class="idbox" id="idBox">
+        <button class="btn ghost" id="idBtn" type="button">Qo'shiq nomini topish</button>
+        <div class="idmsg" id="idMsg" role="status"></div>
+        <div class="idres" id="idRes"><img id="idImg" alt=""><div style="min-width:0"><div class="t" id="idTitle"></div><div class="a" id="idArtist"></div></div></div>
+      </div>
+      <div class="soon"><div><b>Vocal remover</b><br>Qo'shiqdan ovozni olib tashlab, faqat musiqasini qoldirish. Tez orada.</div></div>
+      <div class="bar"><div><button class="btn primary" id="toPresets" type="button" disabled>Davom etish</button></div></div>
+    </section>
+
+    <!-- 2. tayyor rejimlar -->
+    <section class="screen" id="s-presets">
+      <h1>Rejimni tanlang</h1>
+      <p class="lead">Tayyor sozlamalardan birini bosing yoki o'zingiz sozlang.</p>
+      <h2 style="margin-top:4px">Tayyor rejimlar</h2>
+      <div class="presets" id="presetList"></div>
+      <div class="more">
+        <button class="btn ghost" id="openExtra" type="button">
+          <span>Qo'shimcha sozlamalar<small>Tezlik, reverb, bass, sub-bass, 8D va ekvalayzer</small></span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- 3. qo'shimcha sozlamalar -->
+    <section class="screen" id="s-extra">
+      <h1>Qo'shimcha sozlamalar</h1>
+      <p class="lead">Qiymatlarni o'zingiz o'zgartiring. Bot bilan bir xil sozlamalar.</p>
+      <div id="ctls"></div>
+      <h2>Ekvalayzer</h2>
+      <div class="ctl" id="eqBox"></div>
+      <button class="link" id="resetAll" type="button">Boshlang'ich holatga qaytarish</button>
+      <h2>Eshitib ko'rish</h2>
+      <div class="prev" data-prev id="prev-extra">
+        <button class="btn ghost prevBtn" type="button">Tinglab ko'rish</button>
+        <div class="pmsg" role="status"></div>
+        <audio controls preload="auto" hidden></audio>
+      </div>
+      <div class="bar"><div><button class="btn primary" id="extraDone" type="button">Tayyor</button></div></div>
+    </section>
+
+    <!-- 4. nom -->
+    <section class="screen" id="s-name">
+      <h1>Qo'shiq nomi</h1>
+      <p class="lead">Nomni yozing. Oxiriga <b style="color:var(--copper)">(BStrack)</b> ni o'zim qo'shaman.</p>
+      <div class="field">
+        <input id="nameInput" type="text" maxlength="100" placeholder="Artist - Qo'shiq nomi" autocomplete="off" enterkeyhint="done">
+        <span class="tag">(BStrack)</span>
+      </div>
+      <div class="ctl" id="speedBox" hidden>
+        <div class="row"><label for="spd">Tezlik</label><output id="spdOut"></output></div>
+        <div class="hint" id="spdHint"></div>
+        <div class="slide"><button class="step" type="button" id="spdMinus" aria-label="Sekinlashtirish">−</button>
+          <input id="spd" type="range" min="0.5" max="1.5" step="0.01" value="1">
+          <button class="step" type="button" id="spdPlus" aria-label="Tezlashtirish">+</button></div>
+      </div>
+      <div class="summary"><div class="t" id="sumTitle"></div><div class="chips" id="sumChips" style="margin:0"></div></div>
+      <div class="prev" data-prev id="prev-name">
+        <button class="btn ghost prevBtn" type="button">Tinglab ko'rish</button>
+        <div class="pmsg" role="status"></div>
+        <audio controls preload="auto" hidden></audio>
+      </div>
+      <button class="link" id="keepName" type="button" hidden>Asl nomni qoldirish</button>
+      <p class="err" id="nameErr" role="alert"></p>
+      <div class="bar"><div><button class="btn primary" id="startBtn" type="button">Ishlovni boshlash</button></div></div>
+    </section>
+
+    <!-- 5. jarayon / natija -->
+    <section class="screen center" id="s-run">
+      <div class="dial" id="dial"><div class="spin"></div><img src="/cover.jpg" alt=""></div>
+      <div class="wave" id="wave" aria-hidden="true"></div>
+      <h1 id="runTitle">Yuklanmoqda</h1>
+      <p class="lead pct" id="runText" style="margin:0 auto"></p>
+      <p class="stay" id="runStay">Ilovani yopmang. Tayyor bo'lgach qo'shiq botga yuboriladi.</p>
+      <div class="bar" id="runBar" hidden><div>
+        <button class="btn primary" id="closeBtn" type="button">Botga qaytish</button>
+        <button class="btn ghost" id="againBtn" type="button">Yana qo'shiq</button>
+      </div></div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+'use strict';
+var tg = window.Telegram && window.Telegram.WebApp;
+var $ = function(id){return document.getElementById(id)};
+var initData = tg ? tg.initData : '';
+var cfg = null;
+var state = {file:null, preset:null, custom:null, params:null, from:'presets', name:''};
+var stack = [];            // ekranlar tarixi (orqaga uchun)
+var current = 'boot';
+var busy = false;          // ishlov ketayotganda orqaga qaytib bo'lmaydi
+var STEP_OF = {file:0, presets:1, extra:1, name:2, run:3};
+
+if (tg){
+  try{ tg.ready(); tg.expand(); tg.setHeaderColor('#0e1014'); tg.setBackgroundColor('#0e1014'); tg.disableVerticalSwipes && tg.disableVerticalSwipes(); }catch(e){}
+}
+
+/* ---------- yordamchilar ---------- */
+function el(tag, cls, html){var e=document.createElement(tag); if(cls)e.className=cls; if(html!=null)e.innerHTML=html; return e}
+function fmtDb(v){return (v>0?'+':'')+v+' dB'}
+function fmtSize(b){return b>1048576 ? (b/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(b/1024))+' KB'}
+function toast(t){var x=$('toast'); x.textContent=t; x.classList.add('on'); clearTimeout(toast.t); toast.t=setTimeout(function(){x.classList.remove('on')},2200)}
+function haptic(kind){try{tg && tg.HapticFeedback && tg.HapticFeedback.impactOccurred(kind||'light')}catch(e){}}
+function api(path, opts){
+  opts = opts||{}; opts.headers = Object.assign({'X-Init-Data': initData}, opts.headers||{});
+  return fetch(path, opts).then(function(r){return r.json().then(function(j){j._status=r.status; return j})});
+}
+
+/* ---------- ekranlar va "Orqaga" ---------- */
+function show(id, push){
+  if (push !== false && current !== 'boot' && current !== id) stack.push(current);
+  document.querySelectorAll('audio').forEach(function(a){ try{ a.pause(); }catch(e){} });
+  document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('on')});
+  $('s-'+id).classList.add('on');
+  current = id;
+  var hasBack = stack.length > 0 && !busy && id !== 'lock';
+  $('backBtn').classList.toggle('on', hasBack);
+  var st = STEP_OF[id];
+  document.querySelectorAll('#steps i').forEach(function(i,k){i.classList.toggle('on', st!=null && k<=st)});
+  $('steps').style.visibility = (st==null) ? 'hidden' : 'visible';
+  if (tg && tg.BackButton){ try{ hasBack ? tg.BackButton.show() : tg.BackButton.hide(); }catch(e){} }
+  window.scrollTo(0,0);
+}
+function back(){
+  if (busy || !stack.length) return;
+  haptic('light');
+  var prev = stack.pop();
+  show(prev, false);
+}
+$('backBtn').addEventListener('click', back);
+if (tg && tg.BackButton){ try{ tg.BackButton.onClick(back); }catch(e){} }
+
+/* ---------- 1. fayl ---------- */
+$('pickBtn').addEventListener('click', function(){ $('fileInput').click(); });
+$('fileInput').addEventListener('change', function(e){
+  var f = e.target.files && e.target.files[0]; if(!f) return;
+  var maxB = cfg.max_mb*1048576;
+  if (f.size > maxB){ toast('Fayl juda katta. '+cfg.max_mb+' MB gacha bo\'lsin.'); e.target.value=''; return; }
+  function accept(){
+    state.file = f; state.uploadId = null; resetId();
+    $('fn').textContent = f.name; $('fs').textContent = fmtSize(f.size);
+    $('fileOk').classList.add('on'); $('toPresets').disabled = true;
+    haptic('light');
+    uploadFile(f);
+  }
+  // davomiylikni oldindan tekshirish (aniqlab bo'lmasa, server tekshiradi)
+  var a = new Audio(), u = URL.createObjectURL(f), done = false;
+  function fin(ok){ if(done) return; done = true; URL.revokeObjectURL(u); if(ok) accept(); else { toast('Qo\'shiq '+cfg.max_minutes+' daqiqadan oshmasin.'); e.target.value=''; } }
+  a.preload = 'metadata';
+  a.onloadedmetadata = function(){ fin(!isFinite(a.duration) || a.duration <= cfg.max_minutes*60); };
+  a.onerror = function(){ fin(true); };
+  setTimeout(function(){ fin(true); }, 3000);
+  a.src = u;
+});
+var upXhr = null;
+function uploadFile(f){
+  if (upXhr) { try{ upXhr.abort(); }catch(e){} }
+  var xhr = upXhr = new XMLHttpRequest();
+  xhr.open('POST','/api/upload');
+  xhr.setRequestHeader('X-Init-Data', initData);
+  xhr.setRequestHeader('Content-Type','application/octet-stream');
+  $('fs').textContent = fmtSize(f.size)+' · yuklanmoqda 0%';
+  xhr.upload.onprogress = function(e){ if(e.lengthComputable && state.file===f) $('fs').textContent = fmtSize(f.size)+' · yuklanmoqda '+Math.round(e.loaded/e.total*100)+'%'; };
+  xhr.onerror = function(){ if(state.file===f) $('fs').textContent = 'Yuklanmadi. Faylni qaytadan tanlang.'; };
+  xhr.onload = function(){
+    if (state.file !== f) return;
+    var j = {}; try{ j = JSON.parse(xhr.responseText); }catch(e){}
+    if (xhr.status === 200 && j.upload){ state.uploadId = j.upload; $('fs').textContent = fmtSize(f.size)+' · tayyor'; $('toPresets').disabled = false; $('idBox').classList.add('on'); }
+    else { $('fs').textContent = j.error || 'Yuklanmadi. Faylni qaytadan tanlang.'; }
+  };
+  xhr.send(f);
+}
+$('toPresets').addEventListener('click', function(){ if(state.file && state.uploadId) show('presets'); });
+
+/* ---------- qo'shiq nomini topish (Shazam) ---------- */
+function resetId(){
+  state.found = '';
+  $('idBox').classList.remove('on'); $('idRes').classList.remove('on'); $('idMsg').textContent=''; $('idBtn').disabled=false;
+  $('idBtn').textContent = 'Qo\'shiq nomini topish';
+}
+$('idBtn').addEventListener('click', function(){
+  if (!state.uploadId) return;
+  var btn = $('idBtn'), msg = $('idMsg'), upId = state.uploadId;
+  btn.disabled = true; btn.textContent = 'Qidirilmoqda…'; msg.textContent = ''; $('idRes').classList.remove('on'); haptic('light');
+  function fail(t){ if(state.uploadId!==upId) return; btn.disabled=false; btn.textContent='Qaytadan urinib ko\'rish'; msg.textContent=t; }
+  fetch('/api/identify', {method:'POST', headers:{'X-Init-Data':initData, 'X-Upload':upId}})
+  .then(function(r){ return r.json().then(function(j){ j._status=r.status; return j; }); })
+  .then(function(j){
+    if (!j.job) return fail(j.error || 'Boshlab bo\'lmadi.');
+    var n = 0;
+    (function tick(){
+      if (state.uploadId !== upId) return;
+      api('/api/job/'+j.job).then(function(r){
+        if (r.status === 'done'){
+          var res = r.result || {};
+          if (!res.found){ return fail('Qo\'shiq topilmadi. Boshqa fayl bilan yoki qo\'lda nom yozib ko\'ring.'); }
+          state.found = (res.artist ? res.artist+' - ' : '') + res.title;
+          state.nameTouched = false;
+          $('idTitle').textContent = res.title; $('idArtist').textContent = res.artist || '';
+          var img = $('idImg'); if (res.cover && /^https:\/\//.test(res.cover)){ img.src = res.cover; img.style.display=''; } else { img.removeAttribute('src'); img.style.display='none'; }
+          $('idRes').classList.add('on'); msg.textContent = 'Nom keyingi qadamda tayyor turadi.';
+          btn.disabled=false; btn.textContent='Qayta qidirish'; haptic('medium');
+        } else if (r.status === 'error'){ fail(r.message || 'Aniqlab bo\'lmadi.'); }
+        else if (++n > 60){ fail('Uzoq davom etdi. Qaytadan urinib ko\'ring.'); }
+        else setTimeout(tick, 1500);
+      }).catch(function(){ if (++n > 5) fail('Aloqa uzildi.'); else setTimeout(tick, 2000); });
+    })();
+  }).catch(function(){ fail('Aloqa uzildi.'); });
+});
+
+/* ---------- 2. tayyor rejimlar ---------- */
+function eqViz(eq){
+  var w = el('div','eq'); w.setAttribute('aria-hidden','true');
+  eq.forEach(function(v){
+    var b = el('b'); var i = el('i', v>=0?'up':'dn');
+    i.style.height = (Math.max(Math.abs(v),0.6)/12*15)+'px'; b.appendChild(i); w.appendChild(b);
+  });
+  return w;
+}
+function chipsFor(p){
+  var out = [['Tezlik '+p.speed.toFixed(2)+'x', p.speed!==1], ['Reverb '+p.reverb+'%', p.reverb>0], ['Bass '+fmtDb(p.bass), p.bass!==0]];
+  if (p.sub>0) out.push(['Sub-bass '+p.sub+'%', true]);
+  if (p.is_8d) out.push(['8D aylanish', true]);
+  return out;
+}
+function fillChips(box, p){
+  box.innerHTML='';
+  chipsFor(p).forEach(function(c){ box.appendChild(el('span','chip'+(c[1]?' hot':''), c[0])); });
+}
+function renderPresets(){
+  var box = $('presetList'); box.innerHTML='';
+  cfg.presets.forEach(function(p){
+    var b = el('button','preset'); b.type='button';
+    b.appendChild(el('span','t', p.title));
+    b.appendChild(el('span','d', p.desc));
+    var viz = eqViz(p.eq); b.appendChild(viz);
+    var chips = el('div','chips'); fillChips(chips,p); b.appendChild(chips);
+    b.addEventListener('click', function(){ haptic('medium'); chooseParams({preset:p.key}, p, 'presets'); });
+    box.appendChild(b);
+  });
+}
+
+/* ---------- 3. qo'shimcha sozlamalar ---------- */
+var CTL = [
+  {k:'speed', label:'Tezlik', min:0.5, max:1.5, step:0.05, fmt:function(v){return v.toFixed(2)+'x'}, hint:'Past tezlik ovozni ham pastlashtiradi (slowed).'},
+  {k:'reverb', label:'Reverb', min:0, max:100, step:5, fmt:function(v){return v+'%'}},
+  {k:'bass', label:'Bass', min:-12, max:12, step:2, fmt:fmtDb},
+  {k:'sub', label:'Sub-bass (Lowbass)', min:0, max:100, step:10, fmt:function(v){return v+'%'}, hint:'Chuqur past tovush qo\'shadi. Telefon dinamigida ham seziladi.'}
+];
+function setFill(r){ r.style.setProperty('--p', ((r.value-r.min)/(r.max-r.min)*100)+'%'); }
+function bindSlider(box, key, min, max, step, onChange){
+  var r = box.querySelector('input'), o = box.querySelector('output');
+  function apply(v){
+    v = Math.min(max, Math.max(min, Math.round(v/step)*step)); v = +v.toFixed(2);
+    r.value = v; setFill(r); onChange(v, o);
+  }
+  r.addEventListener('input', function(){ apply(+r.value); });
+  box.querySelectorAll('.step').forEach(function(b){
+    b.addEventListener('click', function(){ haptic('light'); apply(+r.value + (+b.dataset.d)*step); });
+  });
+  apply(+r.value);
+}
+function renderExtra(){
+  var c = state.custom, box = $('ctls'); box.innerHTML='';
+  CTL.forEach(function(d){
+    var w = el('div','ctl');
+    w.innerHTML = '<div class="row"><label for="r_'+d.k+'">'+d.label+'</label><output></output></div>'
+      + (d.hint?'<div class="hint">'+d.hint+'</div>':'')
+      + '<div class="slide"><button class="step" type="button" data-d="-1" aria-label="'+d.label+' kamaytirish">−</button>'
+      + '<input id="r_'+d.k+'" type="range" min="'+d.min+'" max="'+d.max+'" step="'+d.step+'" value="'+c[d.k]+'">'
+      + '<button class="step" type="button" data-d="1" aria-label="'+d.label+' oshirish">+</button></div>';
+    box.appendChild(w);
+    bindSlider(w, d.k, d.min, d.max, d.step, function(v,o){ c[d.k]=v; o.textContent=d.fmt(v); markDirty('prev-extra'); });
+  });
+  var sw = el('div','ctl');
+  sw.innerHTML = '<button class="switch" type="button" role="switch" aria-checked="'+c.is_8d+'"><span class="tx"><b>8D aylanish</b><span>Ovoz boshingiz atrofida aylanadi</span></span><span class="tg"></span></button>';
+  var sb = sw.querySelector('.switch');
+  sb.addEventListener('click', function(){ c.is_8d=!c.is_8d; sb.setAttribute('aria-checked', c.is_8d); haptic('light'); markDirty('prev-extra'); });
+  box.appendChild(sw);
+
+  var eb = $('eqBox'); eb.innerHTML='';
+  cfg.eq_labels.forEach(function(lb, i){
+    var row = el('div','eqrow');
+    row.innerHTML = '<span>'+lb+'</span><input type="range" min="-12" max="12" step="1" value="'+c.eq[i]+'" aria-label="'+lb+'"><output></output>';
+    eb.appendChild(row);
+    var r = row.querySelector('input'), o = row.querySelector('output');
+    function upd(){ c.eq[i]=+r.value; o.textContent=fmtDb(c.eq[i]); setFill(r); markDirty('prev-extra'); }
+    r.addEventListener('input', upd); upd();
+  });
+}
+function resetCustom(){
+  state.custom = JSON.parse(JSON.stringify(cfg.defaults));
+  renderExtra();
+}
+$('openExtra').addEventListener('click', function(){ if(!state.custom) resetCustom(); renderExtra(); show('extra'); });
+$('resetAll').addEventListener('click', function(){ resetCustom(); toast('Boshlang\'ich holatga qaytdi'); });
+$('extraDone').addEventListener('click', function(){
+  var c = JSON.parse(JSON.stringify(state.custom));
+  chooseParams({custom:c}, {title:'Qo\'shimcha sozlamalar', speed:c.speed, reverb:c.reverb, bass:c.bass, sub:c.sub, is_8d:c.is_8d, eq:c.eq}, 'extra');
+});
+
+/* ---------- 4. nom ---------- */
+function baseName(fn){ return fn.replace(/\.[^.]+$/,'').replace(/_/g,' ').replace(/\s*\(\s*bstrack\s*\)\s*$/i,'').trim(); }
+function spdText(v){
+  var pc = Math.round(Math.abs(1 - v) * 100);
+  return pc === 0 ? 'Asl tezlik' : (v < 1 ? pc + '% sekinroq (slowed)' : pc + '% tezroq');
+}
+function spdUpdate(v){
+  v = Math.min(1.5, Math.max(0.5, Math.round(v * 100) / 100));
+  $('spd').value = v; setFill($('spd'));
+  $('spdOut').textContent = v.toFixed(2) + 'x';
+  $('spdHint').textContent = spdText(v);
+  markDirty('prev-name');
+  if (state.params && state.params.preset){
+    state.params.speed = v;
+    state.shown.speed = v; fillChips($('sumChips'), state.shown);
+  }
+}
+$('spd').addEventListener('input', function(){ spdUpdate(+$('spd').value); });
+$('spdMinus').addEventListener('click', function(){ haptic('light'); spdUpdate(+$('spd').value - 0.05); });
+$('spdPlus').addEventListener('click', function(){ haptic('light'); spdUpdate(+$('spd').value + 0.05); });
+function chooseParams(payload, shown, from){
+  shown = Object.assign({}, shown);
+  state.params = payload; state.shown = shown; state.from = from;
+  var isPreset = !!payload.preset;
+  $('speedBox').hidden = !isPreset;
+  if (isPreset){ delete payload.speed; spdUpdate(shown.speed); delete payload.speed; payload.speed = shown.speed; }
+  $('sumTitle').textContent = shown.title;
+  fillChips($('sumChips'), shown);
+  var guess = state.found || (state.file ? baseName(state.file.name) : '');
+  if (!state.nameTouched) $('nameInput').value = guess;
+  $('keepName').hidden = !guess;
+  $('nameErr').textContent = '';
+  show('name');
+}
+$('nameInput').addEventListener('input', function(){ state.nameTouched = true; $('nameErr').textContent=''; });
+$('keepName').addEventListener('click', function(){ $('nameInput').value = baseName(state.file.name); state.nameTouched = true; haptic('light'); });
+$('startBtn').addEventListener('click', startJob);
+$('nameInput').addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); $('nameInput').blur(); } });
+
+/* ---------- eshitib ko'rish (namuna) ---------- */
+var PV = {};   // id -> {ticket, url, ready}
+function markDirty(id){
+  var p = PV[id]; if (!p || !p.ready) return;
+  var root = $(id); root.querySelector('.pmsg').textContent = 'Sozlamalar o\'zgardi. Yangi namuna uchun qayta bosing.';
+  p.ready = false;
+}
+function bindPreview(id, getPayload){
+  var root = $(id), btn = root.querySelector('.prevBtn'), msg = root.querySelector('.pmsg'), au = root.querySelector('audio');
+  var p = PV[id] = {ticket:0, url:null, ready:false};
+  btn.addEventListener('click', function(){
+    if (!state.uploadId){ msg.textContent = 'Avval qo\'shiq yuklansin.'; return; }
+    var t = ++p.ticket; au.pause(); btn.disabled = true;
+    msg.textContent = 'Namuna tayyorlanmoqda, 10–40 soniya kuting…';
+    fetch('/api/preview', {method:'POST', headers:{'X-Init-Data':initData, 'X-Upload':state.uploadId, 'X-Params':encodeURIComponent(JSON.stringify(getPayload()))}})
+    .then(function(r){ return r.json().then(function(j){ j._s=r.status; return j; }); })
+    .then(function(j){
+      if (j.expired){ throw new Error('Fayl muddati tugagan. Qo\'shiqni qaytadan tanlang.'); }
+      if (!j.job){ throw new Error(j.error || 'Namunani boshlab bo\'lmadi.'); }
+      return waitPreview(j.job, t, 0);
+    })
+    .then(function(job){
+      if (t !== p.ticket) return;
+      return fetch('/api/job/'+job+'/audio', {headers:{'X-Init-Data':initData}}).then(function(r){ if(!r.ok) throw new Error('Namuna yuklanmadi.'); return r.blob(); })
+      .then(function(b){
+        if (t !== p.ticket) return;
+        if (p.url) URL.revokeObjectURL(p.url);
+        p.url = URL.createObjectURL(b); au.src = p.url; au.hidden = false; p.ready = true;
+        msg.textContent = 'Namuna tayyor: qo\'shiqning o\'rtasidan 25 soniya.';
+        var pr = au.play(); if (pr && pr.catch) pr.catch(function(){});
+      });
+    })
+    .catch(function(e){ if (t === p.ticket) msg.textContent = e.message || 'Xatolik. Qaytadan urinib ko\'ring.'; })
+    .then(function(){ btn.disabled = false; });
+  });
+}
+function waitPreview(job, t, fails){
+  return new Promise(function(resolve, reject){
+    (function tick(n){
+      api('/api/job/'+job).then(function(j){
+        if (t !== PV['prev-extra'].ticket && t !== PV['prev-name'].ticket) return resolve(job);
+        if (j.status === 'done') return resolve(job);
+        if (j.status === 'error') return reject(new Error(j.message || 'Namunani tayyorlab bo\'lmadi.'));
+        setTimeout(function(){ tick(0); }, 2000);
+      }).catch(function(){ if (n > 5) reject(new Error('Server bilan aloqa uzildi.')); else setTimeout(function(){ tick(n+1); }, 3000); });
+    })(0);
+  });
+}
+bindPreview('prev-extra', function(){ return {custom: JSON.parse(JSON.stringify(state.custom))}; });
+bindPreview('prev-name', function(){ return state.params; });
+
+/* ---------- 5. ishlov ---------- */
+function makeWave(){ var w=$('wave'); if(w.children.length) return; for(var i=0;i<17;i++){var b=el('i'); b.style.animationDelay=(i*0.07)+'s'; w.appendChild(b);} }
+function runView(kind, title, text){
+  var d = $('dial'); d.className = 'dial' + (kind==='done'?' done':kind==='fail'?' fail':'');
+  $('wave').style.display = (kind==='work') ? 'flex' : 'none';
+  $('runTitle').textContent = title; $('runText').textContent = text||'';
+  $('runStay').style.display = (kind==='work') ? 'block' : 'none';
+  $('runBar').hidden = (kind==='work');
+  $('againBtn').style.display = '';
+}
+function startJob(){
+  var name = $('nameInput').value.trim();
+  if (!name){ $('nameErr').textContent = 'Qo\'shiq nomini yozing.'; return; }
+  if (!state.file) { $('nameErr').textContent = 'Avval qo\'shiq tanlang.'; return; }
+  if (!state.uploadId){ $('nameErr').textContent = 'Qo\'shiq yuklanmagan. Qaytadan tanlang.'; return; }
+  busy = true; makeWave(); show('run');
+  runView('work','Boshlanmoqda','');
+  fetch('/api/render', {method:'POST', headers:{'X-Init-Data':initData, 'X-Upload':state.uploadId, 'X-Params':encodeURIComponent(JSON.stringify(state.params)), 'X-Name':encodeURIComponent(name)}})
+  .then(function(r){ return r.json().then(function(j){ j._s=r.status; return j; }); })
+  .then(function(j){
+    if (j.job){ poll(j.job, 0); }
+    else if (j.expired){ busy = false; state.file=null; state.uploadId=null; $('fileInput').value=''; $('fileOk').classList.remove('on'); $('toPresets').disabled=true; stack.length=0; show('file', false); toast(j.error); }
+    else fail(j.error || 'Xatolik yuz berdi. Qaytadan urinib ko\'ring.');
+  })
+  .catch(function(){ fail('Aloqa uzildi. Internetni tekshirib, qaytadan urinib ko\'ring.'); });
+}
+var LABELS = {queued:['Navbat kutilmoqda','Oldingi qo\'shiq tugashi bilan boshlanadi.'], processing:['Ishlov berilmoqda','Odatda 1–3 daqiqa ketadi.'], sending:['Botga yuborilmoqda','Deyarli tayyor.']};
+function poll(job, fails){
+  api('/api/job/'+job).then(function(j){
+    if (j.status === 'done'){ finish(); return; }
+    if (j.status === 'error'){ fail(j.message); return; }
+    var L = LABELS[j.status] || LABELS.processing; runView('work', L[0], L[1]);
+    setTimeout(function(){ poll(job, 0); }, 2500);
+  }).catch(function(){
+    if (fails > 6) fail('Server bilan aloqa uzildi. Qo\'shiq tayyor bo\'lsa, botga yuboriladi.');
+    else setTimeout(function(){ poll(job, fails+1); }, 4000);
+  });
+}
+function finish(){
+  busy = false; runView('done','Qo\'shiq tayyor','Botga yuborildi. Telegram chatini oching, u yerda qo\'shiqni topasiz.');
+  try{ tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); }catch(e){}
+  stack = []; show('run', false);
+}
+function fail(msg){
+  busy = false; runView('fail','Bajarilmadi', msg);
+  $('againBtn').textContent = 'Qaytadan urinish'; stack.length = 0; stack.push('name'); show('run', false);
+  $('closeBtn').style.display = 'none';
+  $('againBtn').dataset.mode = 'retry';
+}
+$('closeBtn').addEventListener('click', function(){ if(tg) tg.close(); });
+$('againBtn').addEventListener('click', function(){
+  if ($('againBtn').dataset.mode === 'retry'){ $('againBtn').dataset.mode=''; $('closeBtn').style.display=''; $('againBtn').textContent='Yana qo\'shiq'; stack.length=0; stack.push('file','presets'); show('name', false); return; }
+  state.file=null; state.uploadId=null; state.nameTouched=false; resetId(); $('fileInput').value=''; $('fileOk').classList.remove('on'); $('toPresets').disabled=true;
+  stack.length=0; show('file', false);
+});
+
+/* ---------- boshlash ---------- */
+function lock(title, text, id){
+  $('lockTitle').textContent = title; $('lockText').textContent = text;
+  if (id){ $('lockId').textContent = 'ID: '+id; $('lockId').hidden = false; }
+  show('lock', false);
+}
+function boot(){
+  if (!tg || !initData){
+    lock('Telegram ichida oching','Bu sahifa faqat Telegram\'dagi @Atmosremakerbot ichidan, «Studio» tugmasi orqali ochiladi.');
+    return;
+  }
+  api('/api/me').then(function(j){
+    if (j._status === 401){ lock('Telegram ichida oching','Sahifani bot ichidan qayta oching.'); return; }
+    if (!j.allowed){ if (j.expired) lock('Obuna tugagan','Obuna muddatingiz tugagan. Yangilash uchun admin\'ga yozing, so\'ng sahifani qayta oching.', j.id); else lock('Ruxsat yo\'q','Sizda hozircha foydalanish uchun ruxsat yo\'q. Adminga so\'rov yuborildi. Ruxsat berilgach sahifani qayta oching.', j.id); return; }
+    cfg = j.config;
+    if (typeof j.days_left === 'number'){ var si = $('subInfo'); si.hidden = false; si.textContent = 'Obuna: ' + j.days_left + ' kun qoldi'; si.classList.toggle('warn', j.days_left <= 3); }
+    $('limits').textContent = 'mp3, m4a, wav · '+cfg.max_minutes+' daqiqagacha · '+cfg.max_mb+' MB gacha';
+    renderPresets();
+    show('file', false);
+  }).catch(function(){
+    $('bootMsg').textContent = 'Server uyg\'onmoqda, 30 soniyadan keyin qayta oching.';
+  });
+}
+boot();
+})();
+</script>
+</body>
+</html>

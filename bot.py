@@ -230,6 +230,53 @@ def run_web_preview(job_id, in_path, params, tmpdir):
         _set_job(job_id, status="error", message="Namunani tayyorlab bo'lmadi. Qaytadan urinib ko'ring.")
 
 
+def run_web_identify(job_id, in_path, tmpdir):
+    """Qo'shiq nomini Shazam orqali aniqlaydi (fayldan 12 soniyalik 1–2 ta bo'lak olinadi)."""
+    import subprocess
+    try:
+        _set_job(job_id, status="processing")
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", in_path],
+            capture_output=True, text=True, timeout=60)
+        dur = float(probe.stdout.strip() or 0)
+        clip_len = 12
+        points = [0.35, 0.65] if dur > 40 else [0.0]
+        found = None
+        for i, frac in enumerate(points):
+            start = max(0.0, min(dur * frac, dur - clip_len))
+            clip = os.path.join(tmpdir, f"id{i}.mp3")
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", str(clip_len), "-i", in_path,
+                 "-vn", "-ac", "1", "-ar", "44100", "-b:a", "128k", clip],
+                check=True, timeout=60)
+            found = identify_clip(clip)
+            if found:
+                break
+        _set_job(job_id, status="done", result=found or {"found": False})
+    except Exception:
+        logger.exception("Qo'shiqni aniqlashda xatolik")
+        _set_job(job_id, status="error", message="Aniqlab bo'lmadi. Birozdan keyin qaytadan urinib ko'ring.")
+
+
+def identify_clip(path):
+    """Shazam'ga bitta bo'lak yuboradi. Topilsa {found, title, artist, cover}, aks holda None."""
+    from shazamio import Shazam
+
+    async def _go():
+        return await asyncio.wait_for(Shazam(language="en-US").recognize(path), 45)
+
+    res = asyncio.run(_go())
+    track = (res or {}).get("track")
+    if not track:
+        return None
+    return {
+        "found": True,
+        "title": str(track.get("title", ""))[:120],
+        "artist": str(track.get("subtitle", ""))[:120],
+        "cover": str((track.get("images") or {}).get("coverart", "")),
+    }
+
+
 def run_web_job(job_id, uid, in_path, params, full_name, upload_id=None):
     artist, title = split_name(full_name)
     tmpdir = os.path.dirname(in_path)
@@ -353,7 +400,8 @@ class Web(BaseHTTPRequestHandler):
                     return self._json(404, {"ok": False})
                 with open(snap["audio"], "rb") as f:
                     return self._send(200, f.read(), "audio/mpeg")
-            return self._json(200, {"ok": True, "status": snap["status"], "message": snap.get("message", "")})
+            return self._json(200, {"ok": True, "status": snap["status"], "message": snap.get("message", ""),
+                                    "result": snap.get("result")})
         self._send(404, b"Not found", "text/plain; charset=utf-8")
 
     def _notify_admin_once(self, user):
@@ -397,7 +445,7 @@ class Web(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        if path not in ("/api/render", "/api/upload", "/api/preview"):
+        if path not in ("/api/render", "/api/upload", "/api/preview", "/api/identify"):
             return self._send(404, b"Not found", "text/plain; charset=utf-8")
         user = self._auth_post()
         if not user:
@@ -432,6 +480,16 @@ class Web(BaseHTTPRequestHandler):
             up = dict(up) if up and up["uid"] == uid else None
         if not up:
             return self._json(410, {"ok": False, "error": "Fayl muddati tugagan. Qo'shiqni qaytadan tanlang.", "expired": True})
+        if path == "/api/identify":
+            if self._busy(uid, "identify"):
+                return self._json(429, {"ok": False, "error": "Oldingi qidiruv davom etmoqda."})
+            import tempfile as _tf0
+            tmpdir = _tf0.mkdtemp(prefix="id_")
+            job_id = uuid.uuid4().hex
+            with JOBS_LOCK:
+                JOBS[job_id] = {"uid": uid, "kind": "identify", "status": "queued", "t": time.time(), "dir": tmpdir}
+            threading.Thread(target=run_web_identify, args=(job_id, up["path"], tmpdir), daemon=True).start()
+            return self._json(202, {"ok": True, "job": job_id})
         try:
             params = sanitize_params(json.loads(unquote(self.headers.get("X-Params", "{}"))))
         except Exception:

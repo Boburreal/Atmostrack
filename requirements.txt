@@ -1,5 +1,6 @@
 python-telegram-bot==21.6
 pydub==0.25.1
-numpy==1.26.4
+numpy==2.4.6
 pedalboard==0.9.16
 mutagen==1.47.0
+shazamio==0.8.1
