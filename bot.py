@@ -15,6 +15,8 @@ import asyncio
 import logging
 import tempfile
 import threading
+import traceback
+import multiprocessing as mp
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import numpy as np
@@ -23,7 +25,7 @@ from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter, Limiter
 from mutagen.id3 import ID3, TIT2, TPE1, APIC, ID3NoHeaderError
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
+from telegram.error import BadRequest, Conflict
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -42,6 +44,7 @@ TAG = "(BStrack)"                      # har bir qo'shiq nomi oxiriga qo'shiladi
 MAX_MINUTES = int(os.environ.get("MAX_MINUTES", "8"))
 MAX_DURATION_SEC = MAX_MINUTES * 60
 TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024   # Telegram bot fayl yuklab olish chegarasi
+RENDER_TIMEOUT = int(os.environ.get("RENDER_TIMEOUT", "600"))   # soniya: shundan oshsa ishlov to'xtatiladi
 
 EQ_BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 16000]
 EQ_LABELS = ["60 Hz", "170 Hz", "310 Hz", "600 Hz", "1 kHz", "3 kHz", "6 kHz", "12 kHz", "16 kHz"]
@@ -81,14 +84,19 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 
 # ====================== HEALTH CHECK (Render / HF uchun) ======================
 class Health(BaseHTTPRequestHandler):
-    def do_GET(self):
+    """Faqat server tirik ekanini bildiradi. Bu sahifa orqali botdan foydalanib bo'lmaydi."""
+
+    def _head(self):
         self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write(b"OK")
+
+    def do_GET(self):
+        self._head()
+        self.wfile.write(b"BS Track bot server is running. Use the Telegram bot.")
 
     def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
+        self._head()
 
     def log_message(self, *args):
         pass
@@ -336,6 +344,50 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
     del out
 
     write_tags(out_path, title, artist)
+
+
+class RenderTimeout(Exception):
+    pass
+
+
+class RenderKilled(Exception):
+    """Jarayon tizim tomonidan o'chirildi (ko'pincha xotira yetmaganidan)."""
+
+
+def _render_worker(in_path, out_path, p, title, artist):
+    """Alohida jarayonda ishlaydi. Chiqish kodi: 0 - yaxshi, 3 - juda uzun, 1 - xato."""
+    try:
+        render_audio(in_path, out_path, p, title, artist)
+    except TooLong:
+        os._exit(3)
+    except Exception:
+        traceback.print_exc()
+        os._exit(1)
+    os._exit(0)
+
+
+def render_in_subprocess(in_path, out_path, p, title, artist, timeout):
+    """Ishlovni alohida jarayonda bajaradi: qotib qolsa o'chiriladi, xotira yetmasa
+    bot o'zi tirik qoladi va foydalanuvchiga xabar beradi."""
+    ctx = mp.get_context("spawn")
+    proc = ctx.Process(target=_render_worker, args=(in_path, out_path, p, title, artist))
+    proc.start()
+    proc.join(timeout)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(5)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+        raise RenderTimeout()
+    code = proc.exitcode
+    if code == 0 and os.path.exists(out_path):
+        return
+    if code == 3:
+        raise TooLong()
+    if code is not None and code < 0:
+        raise RenderKilled(f"signal {-code}")
+    raise RuntimeError(f"render jarayoni xato bilan tugadi (kod {code})")
 
 
 def write_tags(path: str, title: str, artist: str):
@@ -682,7 +734,9 @@ async def run_job(msg, context: ContextTypes.DEFAULT_TYPE, raw_name: str):
                 in_path = os.path.join(tmp, "input")
                 out_path = os.path.join(tmp, "output.mp3")
                 await tg_file.download_to_drive(in_path)
-                await asyncio.to_thread(render_audio, in_path, out_path, params, title, artist)
+                await asyncio.to_thread(
+                    render_in_subprocess, in_path, out_path, params, title, artist, RENDER_TIMEOUT
+                )
 
                 thumb = open(THUMB_PATH, "rb") if os.path.exists(THUMB_PATH) else None
                 try:
@@ -718,18 +772,51 @@ async def run_job(msg, context: ContextTypes.DEFAULT_TYPE, raw_name: str):
 
     except TooLong:
         await status.edit_text(f"Qo'shiq juda uzun. Hozircha {MAX_MINUTES} daqiqagacha qabul qilaman.")
+    except RenderTimeout:
+        logger.error("Ishlov vaqti tugadi (%s s)", RENDER_TIMEOUT)
+        await status.edit_text(
+            "Ishlov juda uzoq davom etdi va to'xtatildi. Qisqaroq qo'shiq bilan urinib ko'ring."
+        )
+        await notify_admin(context, f"Ishlov vaqti tugadi ({RENDER_TIMEOUT} s). Server sekin bo'lishi mumkin.")
+    except RenderKilled as e:
+        logger.error("Ishlov jarayoni o'chirildi: %s", e)
+        await status.edit_text(
+            "Server xotirasi yetmadi. Qisqaroq yoki kichikroq qo'shiq bilan urinib ko'ring."
+        )
+        await notify_admin(context, f"Ishlov jarayoni tizim tomonidan o'chirildi ({e}). Xotira yetmagan bo'lishi mumkin.")
     except BadRequest as e:
         logger.exception("Telegram xatosi")
         if "too big" in str(e).lower():
             await status.edit_text("Fayl juda katta (20 MB dan oshiq). Kichikroq mp3 yuboring.")
         else:
             await status.edit_text("Telegram bilan xatolik yuz berdi. Qaytadan urinib ko'ring.")
-    except Exception:
+    except Exception as e:
         logger.exception("Ishlov berishda xatolik")
         await status.edit_text(
             "Kechirasiz, ishlov berishda xatolik yuz berdi. Boshqa fayl bilan urinib ko'ring "
             "yoki keyinroq qaytadan yuboring."
         )
+        await notify_admin(context, f"Ishlov xatosi: {type(e).__name__}: {str(e)[:300]}")
+
+
+async def notify_admin(context: ContextTypes.DEFAULT_TYPE, text: str):
+    if not ADMIN_ID:
+        return
+    try:
+        await context.bot.send_message(ADMIN_ID, "Diqqat: " + text)
+    except Exception:
+        pass
+
+
+async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
+    err = context.error
+    if isinstance(err, Conflict):
+        logger.error(
+            "CONFLICT: shu token bilan boshqa bot nusxasi ham ishlayapti! "
+            "Render'da faqat bitta servis ishlashi kerak (eski servislarni o'chiring)."
+        )
+    else:
+        logger.error("Kutilmagan xato: %s", err, exc_info=err)
 
 
 def main():
@@ -752,8 +839,9 @@ def main():
     app.add_handler(MessageHandler(filters.AUDIO | filters.Document.AUDIO, handle_audio))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_error_handler(on_error)
     logger.info("Bot ishga tushdi")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
