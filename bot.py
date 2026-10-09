@@ -67,8 +67,8 @@ PRESETS = {
         "speed": 1.0, "reverb": 25, "bass": 8, "sub": 0, "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
     },
     "lowbass": {
-        "title": "Lowbass", "desc": "Yumshoq bass: iliq, silliq va yoqimli past tovush. Qulog'ni charchatmaydi.",
-        "speed": 1.0, "reverb": 10, "bass": 3, "sub": 0, "eq": [4, 3, 1, 0, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
+        "title": "Lowbass", "desc": "Chuqur sub-bass (24 Hz): bass bir oktava pastga tushadi. Sekinlashtirilgan va 20% reverb bilan.",
+        "speed": 0.80, "reverb": 20, "bass": 3, "sub": 70, "eq": [0, 0, 0, 0, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
     },
     "8d": {
         "title": "8D Audio", "desc": "Ovoz boshingiz atrofida aylanadi. Quloqchin bilan eshiting.",
@@ -143,6 +143,8 @@ def sanitize_params(raw: dict) -> dict:
         if key not in PRESETS:
             raise ValueError("Noma'lum rejim")
         base = copy.deepcopy(PRESETS[key])
+        if raw.get("speed") is not None:       # foydalanuvchi tezlikni o'zi tanlagan
+            base["speed"] = round(clamp(float(raw["speed"]), 0.5, 1.5), 2)
     else:
         c = raw.get("custom") or {}
         base = copy.deepcopy(DEFAULT_CUSTOM)
@@ -606,19 +608,27 @@ class Rotator8D:
 
 
 class SubBass:
-    """Haqiqiy sub-bass (Lowbass). Oddiy bass tovushni shunchaki baland qiladi, bu esa yangi past chastota yaratadi:
-    1) 110 Hz dan past qism ajratiladi (kick + bass chizig'i),
-    2) oktava pastga tushiriladi (chastota bo'luvchi: 80 Hz -> 40 Hz) va silliqlanadi - chuqur "gumburlash",
-    3) yengil to'yintirish (saturatsiya) 2-3 garmonika qo'shadi - kichik dinamikda va telefonda ham eshitiladi.
-    Holat bo'laklar orasida saqlanadi."""
+    """Haqiqiy sub-bass (Lowbass): past qism OKTAVA PASTGA tushiriladi.
+    Real lowbass remikslarida (masalan 24 Hz sub) shunday qilinadi:
+    1) 75 Hz dan past qism (kick va 808 bass) ajratib olinadi,
+    2) u asl joyidan olib tashlanadi (yoki kamaytiriladi) va o'rniga bir oktava past (80 Hz -> 40 Hz,
+       40 Hz -> 20 Hz) nusxasi qo'yiladi - chuqur, "ichdan titratuvchi" bass,
+    3) 2-3 garmonika yengil qo'shiladi, shunda kichik dinamikda ham bass seziladi.
+    Qiymat (sub, 0-100) shu almashtirish darajasini bildiradi. Holat bo'laklar orasida saqlanadi."""
+
+    CUT_HZ = 75.0
+    REMOVE = 0.0     # asl past qismning qanchasi olib tashlanadi (amt = 1 bo'lganda)
+    GAIN = 1.8       # oktava past sub balandligi
+    HARM = 0.25      # garmonika (eshitilish) ulushi
+    CAP = 1.5        # sub amplitudasi chegarasi
 
     def __init__(self, sr: int, amount: float):
         self.sr = sr
         self.amt = max(0.0, min(1.0, amount / 100.0))
-        self.lp_in = Pedalboard([LowpassFilter(110.0), LowpassFilter(110.0)])
-        self.lp_sub = Pedalboard([LowpassFilter(70.0), LowpassFilter(70.0)])
+        self.lp_in = Pedalboard([LowpassFilter(self.CUT_HZ), LowpassFilter(self.CUT_HZ)])
+        self.lp_sub = Pedalboard([LowpassFilter(60.0), LowpassFilter(60.0)])
         self.lp_env = Pedalboard([LowpassFilter(18.0)])
-        self.lp_harm = Pedalboard([LowpassFilter(220.0), LowpassFilter(220.0)])
+        self.lp_harm = Pedalboard([LowpassFilter(200.0), LowpassFilter(200.0)])
         self.state = 1.0
         self.prev = 0.0
 
@@ -627,7 +637,7 @@ class SubBass:
         mid = ((x[0] + x[1]) * 0.5).astype(np.float32)
         low = self.lp_in(mid[None, :], sr, reset=False)[0]
 
-        # oktava pastga: musbat tomonga o'tishlarda holat almashadi (80 Hz -> 40 Hz kvadrat to'lqin)
+        # oktava pastga: musbat tomonga o'tishlarda holat almashadi (kvadrat to'lqin, yarim chastota)
         ext = np.concatenate([[self.prev], low])
         cross = (ext[:-1] <= 0.0) & (ext[1:] > 0.0)
         parity = (np.cumsum(cross) & 1).astype(np.float32)
@@ -637,12 +647,12 @@ class SubBass:
         self.prev = float(low[-1])
 
         env = self.lp_env(np.abs(low)[None, :].astype(np.float32), sr, reset=False)[0] * 1.8
-        sub = self.lp_sub(sq[None, :], sr, reset=False)[0] * np.minimum(env, 0.6) * 1.6
+        sub = self.lp_sub(sq[None, :], sr, reset=False)[0] * np.minimum(env, self.CAP) * self.GAIN
 
         drive = np.tanh(low * 4.0) * 0.5
         harm = self.lp_harm(drive[None, :].astype(np.float32), sr, reset=False)[0]
 
-        add = (sub * 1.0 + harm * 0.6 + low * 0.5) * self.amt * 1.6
+        add = (sub + harm * self.HARM) * self.amt - low * self.REMOVE * self.amt
         return (x + add[None, :]).astype(np.float32)
 
 
@@ -698,7 +708,7 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
     else:
         board = build_board(p)
     subbass = SubBass(sr, float(p.get("sub", 0))) if p.get("sub", 0) > 0 else None
-    tail = sr * 2 if p.get("reverb", 0) > 0 else 0        # reverb dumi uchun 2 soniya
+    tail = sr * 3 if p.get("reverb", 0) > 0 else 0        # reverb dumi uchun 3 soniya
     out_len = n_total + tail
     stage = np.empty((out_len, 2), dtype=np.int16)
     sumsq2 = 0.0
