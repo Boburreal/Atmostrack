@@ -139,6 +139,12 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 .field .tag{flex:none;color:var(--copper);font-weight:700;font-size:14px;background:rgba(217,162,115,.1);border-radius:8px;padding:6px 10px}
 .summary{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:14px}
 .summary .t{font-family:var(--font-d);font-weight:500;font-size:14px;margin-bottom:8px}
+#speedBox{margin-top:14px}
+.prev{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:12px}
+.prev .btn{padding:12px 16px;font-size:15px}
+.prev .pmsg{color:var(--muted);font-size:13px;margin:8px 2px 0;min-height:1.2em}
+.prev audio{display:block;width:100%;margin-top:10px;height:40px}
+.prev audio[hidden]{display:none}
 .err{color:var(--danger);font-size:14px;margin:12px 0 0;min-height:1em}
 
 /* ---- jarayon ---- */
@@ -222,6 +228,12 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
       <h2>Ekvalayzer</h2>
       <div class="ctl" id="eqBox"></div>
       <button class="link" id="resetAll" type="button">Boshlang'ich holatga qaytarish</button>
+      <h2>Eshitib ko'rish</h2>
+      <div class="prev" data-prev id="prev-extra">
+        <button class="btn ghost prevBtn" type="button">Tinglab ko'rish</button>
+        <div class="pmsg" role="status"></div>
+        <audio controls preload="auto" hidden></audio>
+      </div>
       <div class="bar"><div><button class="btn primary" id="extraDone" type="button">Tayyor</button></div></div>
     </section>
 
@@ -233,7 +245,19 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
         <input id="nameInput" type="text" maxlength="100" placeholder="Artist - Qo'shiq nomi" autocomplete="off" enterkeyhint="done">
         <span class="tag">(BStrack)</span>
       </div>
+      <div class="ctl" id="speedBox" hidden>
+        <div class="row"><label for="spd">Tezlik</label><output id="spdOut"></output></div>
+        <div class="hint" id="spdHint"></div>
+        <div class="slide"><button class="step" type="button" id="spdMinus" aria-label="Sekinlashtirish">−</button>
+          <input id="spd" type="range" min="0.5" max="1.5" step="0.01" value="1">
+          <button class="step" type="button" id="spdPlus" aria-label="Tezlashtirish">+</button></div>
+      </div>
       <div class="summary"><div class="t" id="sumTitle"></div><div class="chips" id="sumChips" style="margin:0"></div></div>
+      <div class="prev" data-prev id="prev-name">
+        <button class="btn ghost prevBtn" type="button">Tinglab ko'rish</button>
+        <div class="pmsg" role="status"></div>
+        <audio controls preload="auto" hidden></audio>
+      </div>
       <button class="link" id="keepName" type="button" hidden>Asl nomni qoldirish</button>
       <p class="err" id="nameErr" role="alert"></p>
       <div class="bar"><div><button class="btn primary" id="startBtn" type="button">Ishlovni boshlash</button></div></div>
@@ -286,6 +310,7 @@ function api(path, opts){
 /* ---------- ekranlar va "Orqaga" ---------- */
 function show(id, push){
   if (push !== false && current !== 'boot' && current !== id) stack.push(current);
+  document.querySelectorAll('audio').forEach(function(a){ try{ a.pause(); }catch(e){} });
   document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('on')});
   $('s-'+id).classList.add('on');
   current = id;
@@ -313,10 +338,11 @@ $('fileInput').addEventListener('change', function(e){
   var maxB = cfg.max_mb*1048576;
   if (f.size > maxB){ toast('Fayl juda katta. '+cfg.max_mb+' MB gacha bo\'lsin.'); e.target.value=''; return; }
   function accept(){
-    state.file = f;
+    state.file = f; state.uploadId = null;
     $('fn').textContent = f.name; $('fs').textContent = fmtSize(f.size);
-    $('fileOk').classList.add('on'); $('toPresets').disabled = false;
+    $('fileOk').classList.add('on'); $('toPresets').disabled = true;
     haptic('light');
+    uploadFile(f);
   }
   // davomiylikni oldindan tekshirish (aniqlab bo'lmasa, server tekshiradi)
   var a = new Audio(), u = URL.createObjectURL(f), done = false;
@@ -327,7 +353,25 @@ $('fileInput').addEventListener('change', function(e){
   setTimeout(function(){ fin(true); }, 3000);
   a.src = u;
 });
-$('toPresets').addEventListener('click', function(){ if(state.file) show('presets'); });
+var upXhr = null;
+function uploadFile(f){
+  if (upXhr) { try{ upXhr.abort(); }catch(e){} }
+  var xhr = upXhr = new XMLHttpRequest();
+  xhr.open('POST','/api/upload');
+  xhr.setRequestHeader('X-Init-Data', initData);
+  xhr.setRequestHeader('Content-Type','application/octet-stream');
+  $('fs').textContent = fmtSize(f.size)+' · yuklanmoqda 0%';
+  xhr.upload.onprogress = function(e){ if(e.lengthComputable && state.file===f) $('fs').textContent = fmtSize(f.size)+' · yuklanmoqda '+Math.round(e.loaded/e.total*100)+'%'; };
+  xhr.onerror = function(){ if(state.file===f) $('fs').textContent = 'Yuklanmadi. Faylni qaytadan tanlang.'; };
+  xhr.onload = function(){
+    if (state.file !== f) return;
+    var j = {}; try{ j = JSON.parse(xhr.responseText); }catch(e){}
+    if (xhr.status === 200 && j.upload){ state.uploadId = j.upload; $('fs').textContent = fmtSize(f.size)+' · tayyor'; $('toPresets').disabled = false; }
+    else { $('fs').textContent = j.error || 'Yuklanmadi. Faylni qaytadan tanlang.'; }
+  };
+  xhr.send(f);
+}
+$('toPresets').addEventListener('click', function(){ if(state.file && state.uploadId) show('presets'); });
 
 /* ---------- 2. tayyor rejimlar ---------- */
 function eqViz(eq){
@@ -391,12 +435,12 @@ function renderExtra(){
       + '<input id="r_'+d.k+'" type="range" min="'+d.min+'" max="'+d.max+'" step="'+d.step+'" value="'+c[d.k]+'">'
       + '<button class="step" type="button" data-d="1" aria-label="'+d.label+' oshirish">+</button></div>';
     box.appendChild(w);
-    bindSlider(w, d.k, d.min, d.max, d.step, function(v,o){ c[d.k]=v; o.textContent=d.fmt(v); });
+    bindSlider(w, d.k, d.min, d.max, d.step, function(v,o){ c[d.k]=v; o.textContent=d.fmt(v); markDirty('prev-extra'); });
   });
   var sw = el('div','ctl');
   sw.innerHTML = '<button class="switch" type="button" role="switch" aria-checked="'+c.is_8d+'"><span class="tx"><b>8D aylanish</b><span>Ovoz boshingiz atrofida aylanadi</span></span><span class="tg"></span></button>';
   var sb = sw.querySelector('.switch');
-  sb.addEventListener('click', function(){ c.is_8d=!c.is_8d; sb.setAttribute('aria-checked', c.is_8d); haptic('light'); });
+  sb.addEventListener('click', function(){ c.is_8d=!c.is_8d; sb.setAttribute('aria-checked', c.is_8d); haptic('light'); markDirty('prev-extra'); });
   box.appendChild(sw);
 
   var eb = $('eqBox'); eb.innerHTML='';
@@ -405,7 +449,7 @@ function renderExtra(){
     row.innerHTML = '<span>'+lb+'</span><input type="range" min="-12" max="12" step="1" value="'+c.eq[i]+'" aria-label="'+lb+'"><output></output>';
     eb.appendChild(row);
     var r = row.querySelector('input'), o = row.querySelector('output');
-    function upd(){ c.eq[i]=+r.value; o.textContent=fmtDb(c.eq[i]); setFill(r); }
+    function upd(){ c.eq[i]=+r.value; o.textContent=fmtDb(c.eq[i]); setFill(r); markDirty('prev-extra'); }
     r.addEventListener('input', upd); upd();
   });
 }
@@ -422,8 +466,30 @@ $('extraDone').addEventListener('click', function(){
 
 /* ---------- 4. nom ---------- */
 function baseName(fn){ return fn.replace(/\.[^.]+$/,'').replace(/_/g,' ').replace(/\s*\(\s*bstrack\s*\)\s*$/i,'').trim(); }
+function spdText(v){
+  var pc = Math.round(Math.abs(1 - v) * 100);
+  return pc === 0 ? 'Asl tezlik' : (v < 1 ? pc + '% sekinroq (slowed)' : pc + '% tezroq');
+}
+function spdUpdate(v){
+  v = Math.min(1.5, Math.max(0.5, Math.round(v * 100) / 100));
+  $('spd').value = v; setFill($('spd'));
+  $('spdOut').textContent = v.toFixed(2) + 'x';
+  $('spdHint').textContent = spdText(v);
+  markDirty('prev-name');
+  if (state.params && state.params.preset){
+    state.params.speed = v;
+    state.shown.speed = v; fillChips($('sumChips'), state.shown);
+  }
+}
+$('spd').addEventListener('input', function(){ spdUpdate(+$('spd').value); });
+$('spdMinus').addEventListener('click', function(){ haptic('light'); spdUpdate(+$('spd').value - 0.05); });
+$('spdPlus').addEventListener('click', function(){ haptic('light'); spdUpdate(+$('spd').value + 0.05); });
 function chooseParams(payload, shown, from){
+  shown = Object.assign({}, shown);
   state.params = payload; state.shown = shown; state.from = from;
+  var isPreset = !!payload.preset;
+  $('speedBox').hidden = !isPreset;
+  if (isPreset){ delete payload.speed; spdUpdate(shown.speed); delete payload.speed; payload.speed = shown.speed; }
   $('sumTitle').textContent = shown.title;
   fillChips($('sumChips'), shown);
   var guess = state.file ? baseName(state.file.name) : '';
@@ -436,6 +502,57 @@ $('nameInput').addEventListener('input', function(){ state.nameTouched = true; $
 $('keepName').addEventListener('click', function(){ $('nameInput').value = baseName(state.file.name); state.nameTouched = true; haptic('light'); });
 $('startBtn').addEventListener('click', startJob);
 $('nameInput').addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); $('nameInput').blur(); } });
+
+/* ---------- eshitib ko'rish (namuna) ---------- */
+var PV = {};   // id -> {ticket, url, ready}
+function markDirty(id){
+  var p = PV[id]; if (!p || !p.ready) return;
+  var root = $(id); root.querySelector('.pmsg').textContent = 'Sozlamalar o\'zgardi. Yangi namuna uchun qayta bosing.';
+  p.ready = false;
+}
+function bindPreview(id, getPayload){
+  var root = $(id), btn = root.querySelector('.prevBtn'), msg = root.querySelector('.pmsg'), au = root.querySelector('audio');
+  var p = PV[id] = {ticket:0, url:null, ready:false};
+  btn.addEventListener('click', function(){
+    if (!state.uploadId){ msg.textContent = 'Avval qo\'shiq yuklansin.'; return; }
+    var t = ++p.ticket; au.pause(); btn.disabled = true;
+    msg.textContent = 'Namuna tayyorlanmoqda, 10–40 soniya kuting…';
+    fetch('/api/preview', {method:'POST', headers:{'X-Init-Data':initData, 'X-Upload':state.uploadId, 'X-Params':encodeURIComponent(JSON.stringify(getPayload()))}})
+    .then(function(r){ return r.json().then(function(j){ j._s=r.status; return j; }); })
+    .then(function(j){
+      if (j.expired){ throw new Error('Fayl muddati tugagan. Qo\'shiqni qaytadan tanlang.'); }
+      if (!j.job){ throw new Error(j.error || 'Namunani boshlab bo\'lmadi.'); }
+      return waitPreview(j.job, t, 0);
+    })
+    .then(function(job){
+      if (t !== p.ticket) return;
+      return fetch('/api/job/'+job+'/audio', {headers:{'X-Init-Data':initData}}).then(function(r){ if(!r.ok) throw new Error('Namuna yuklanmadi.'); return r.blob(); })
+      .then(function(b){
+        if (t !== p.ticket) return;
+        if (p.url) URL.revokeObjectURL(p.url);
+        p.url = URL.createObjectURL(b); au.src = p.url; au.hidden = false; p.ready = true;
+        msg.textContent = 'Namuna tayyor: qo\'shiqning o\'rtasidan 25 soniya.';
+        var pr = au.play(); if (pr && pr.catch) pr.catch(function(){});
+      });
+    })
+    .catch(function(e){ if (t === p.ticket) msg.textContent = e.message || 'Xatolik. Qaytadan urinib ko\'ring.'; })
+    .then(function(){ btn.disabled = false; });
+  });
+}
+function waitPreview(job, t, fails){
+  return new Promise(function(resolve, reject){
+    (function tick(n){
+      api('/api/job/'+job).then(function(j){
+        if (t !== PV['prev-extra'].ticket && t !== PV['prev-name'].ticket) return resolve(job);
+        if (j.status === 'done') return resolve(job);
+        if (j.status === 'error') return reject(new Error(j.message || 'Namunani tayyorlab bo\'lmadi.'));
+        setTimeout(function(){ tick(0); }, 2000);
+      }).catch(function(){ if (n > 5) reject(new Error('Server bilan aloqa uzildi.')); else setTimeout(function(){ tick(n+1); }, 3000); });
+    })(0);
+  });
+}
+bindPreview('prev-extra', function(){ return {custom: JSON.parse(JSON.stringify(state.custom))}; });
+bindPreview('prev-name', function(){ return state.params; });
 
 /* ---------- 5. ishlov ---------- */
 function makeWave(){ var w=$('wave'); if(w.children.length) return; for(var i=0;i<17;i++){var b=el('i'); b.style.animationDelay=(i*0.07)+'s'; w.appendChild(b);} }
@@ -451,22 +568,17 @@ function startJob(){
   var name = $('nameInput').value.trim();
   if (!name){ $('nameErr').textContent = 'Qo\'shiq nomini yozing.'; return; }
   if (!state.file) { $('nameErr').textContent = 'Avval qo\'shiq tanlang.'; return; }
+  if (!state.uploadId){ $('nameErr').textContent = 'Qo\'shiq yuklanmagan. Qaytadan tanlang.'; return; }
   busy = true; makeWave(); show('run');
-  runView('work','Yuklanmoqda','0%');
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST','/api/render');
-  xhr.setRequestHeader('X-Init-Data', initData);
-  xhr.setRequestHeader('X-Params', encodeURIComponent(JSON.stringify(state.params)));
-  xhr.setRequestHeader('X-Name', encodeURIComponent(name));
-  xhr.setRequestHeader('Content-Type','application/octet-stream');
-  xhr.upload.onprogress = function(e){ if(e.lengthComputable) $('runText').textContent = Math.round(e.loaded/e.total*100)+'%'; };
-  xhr.onerror = function(){ fail('Aloqa uzildi. Internetni tekshirib, qaytadan urinib ko\'ring.'); };
-  xhr.onload = function(){
-    var j = {}; try{ j = JSON.parse(xhr.responseText); }catch(e){}
-    if (xhr.status === 202 && j.job){ poll(j.job, 0); }
+  runView('work','Boshlanmoqda','');
+  fetch('/api/render', {method:'POST', headers:{'X-Init-Data':initData, 'X-Upload':state.uploadId, 'X-Params':encodeURIComponent(JSON.stringify(state.params)), 'X-Name':encodeURIComponent(name)}})
+  .then(function(r){ return r.json().then(function(j){ j._s=r.status; return j; }); })
+  .then(function(j){
+    if (j.job){ poll(j.job, 0); }
+    else if (j.expired){ busy = false; state.file=null; state.uploadId=null; $('fileInput').value=''; $('fileOk').classList.remove('on'); $('toPresets').disabled=true; stack.length=0; show('file', false); toast(j.error); }
     else fail(j.error || 'Xatolik yuz berdi. Qaytadan urinib ko\'ring.');
-  };
-  xhr.send(state.file);
+  })
+  .catch(function(){ fail('Aloqa uzildi. Internetni tekshirib, qaytadan urinib ko\'ring.'); });
 }
 var LABELS = {queued:['Navbat kutilmoqda','Oldingi qo\'shiq tugashi bilan boshlanadi.'], processing:['Ishlov berilmoqda','Odatda 1–3 daqiqa ketadi.'], sending:['Botga yuborilmoqda','Deyarli tayyor.']};
 function poll(job, fails){
@@ -494,7 +606,7 @@ function fail(msg){
 $('closeBtn').addEventListener('click', function(){ if(tg) tg.close(); });
 $('againBtn').addEventListener('click', function(){
   if ($('againBtn').dataset.mode === 'retry'){ $('againBtn').dataset.mode=''; $('closeBtn').style.display=''; $('againBtn').textContent='Yana qo\'shiq'; stack.length=0; stack.push('file','presets'); show('name', false); return; }
-  state.file=null; state.nameTouched=false; $('fileInput').value=''; $('fileOk').classList.remove('on'); $('toPresets').disabled=true;
+  state.file=null; state.uploadId=null; state.nameTouched=false; $('fileInput').value=''; $('fileOk').classList.remove('on'); $('toPresets').disabled=true;
   stack.length=0; show('file', false);
 });
 
