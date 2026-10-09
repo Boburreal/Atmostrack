@@ -24,7 +24,7 @@ from pydub import AudioSegment
 from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter, LowpassFilter, Limiter
 from mutagen.id3 import ID3, TIT2, TPE1, APIC, ID3NoHeaderError
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp, MessageEntity
 from telegram.error import BadRequest, Conflict
 from telegram.ext import (
     Application,
@@ -842,21 +842,43 @@ def safe_filename(name: str) -> str:
 
 # ====================== MATNLAR VA TUGMALAR ======================
 GREETING = (
-    "👋 Assalomu alaykum, {name}! Xush kelibsiz!\n\n"
-    "🎧 Men BS Track botiman: qo'shig'ingizni shunday o'zgartiramanki, "
-    "hatto asl ijrochining o'zi ham «bu menmi?» deb qoladi 😎\n\n"
-    "🔥 Nimalar qila olaman:\n"
-    "🌊 Reverb va Slowed + Reverb, xuddi hovuz ichida kuylagandek\n"
-    "💥 Bass Boost va Lowbass, qo'shni «tinchlaning» deb eshik qoqadi 🚪\n"
-    "🌀 8D Audio, tovush boshingiz atrofida aylanadi (quloqchin taqing!)\n"
-    "⏫ Pitch Up, ovoz ham, kayfiyat ham balandlaydi\n"
-    "🎛 Qo'lda sozlash: tezlik, reverb, bass, sub-bass va 9 polosali ekvalayzer\n"
-    "🏷 Nom qo'yish va BS Track muqovasi tayyor\n\n"
-    "🚀 Boshlash juda oson: menga qo'shiq (audio fayl) yuboring!\n"
-    "📏 Qo'shiq {minutes} daqiqadan oshmasin va 20 MB dan katta bo'lmasin "
-    "(bot ham charchaydi 😅).\n\n"
-    "🎤 Tez orada: ovozni olib tashlash (vocal remover), xonanda tanaffusga chiqadi 😄"
+    "🇺🇿 Assalomu alaykum, {name}!\n"
+    "🎧 Men BSTrack botiman: Qo'shig'ingizni chiroyli effektga keltirib beraman. "
+    "Originalini eshitgingiz kelmay qoladi 😁💯\n\n"
+    "😉 Nimalar qila olaman:\n"
+    "📌 Reverb va Slowed + Reverb, bu eng Top effekt 🚀\n"
+    "📌 Bass Boost va Lowbass, Kuchli bass va muloyim bass 🚀\n"
+    "📌 8D Audio, tovush boshingiz atrofida aylanadi (quloqchin taqing!) 🚀\n"
+    "📌 Pitch Up, ovoz balandlashadi. Tezlik 🚀\n"
+    "📌 Qo'lda sozlash 🚀\n"
+    "📌 Nomlash (Tag editor) 🚀\n\n"
+    "‼️ Qo'shiq {minutes} daqiqadan oshmasin va {max_mb} MB dan katta bo'lmasin (bot ham charchaydi 😅).\n\n"
+    "👀 Tez orada: ovozni olib tashlash (vocal remover), xonanda dam olib turadi 😄\n\n"
+    "Boshlash uchun Web sahifaga o'ting 😉"
 )
+
+# Premium (maxsus) emodzilar. Bu yerga «oddiy emodzi: custom_emoji_id» ko'rinishida qo'shiladi.
+# Bo'sh bo'lsa, oddiy emodzilar ko'rinadi. ID olish yo'li: README/yo'riqnoma.
+CUSTOM_EMOJI = {
+    # "🎧": "5368324170671202286",
+}
+
+
+def emoji_entities(text: str):
+    """Matndagi emodzilarni premium emodzilarga almashtiradigan entity'lar (UTF-16 bo'yicha)."""
+    ents = []
+    for ch, cid in CUSTOM_EMOJI.items():
+        start = 0
+        while True:
+            i = text.find(ch, start)
+            if i < 0:
+                break
+            off = len(text[:i].encode("utf-16-le")) // 2
+            ents.append(MessageEntity(type=MessageEntity.CUSTOM_EMOJI, offset=off,
+                                      length=len(ch.encode("utf-16-le")) // 2, custom_emoji_id=cid))
+            start = i + len(ch)
+    return ents or None
+
 
 SAVE_HINT = (
     "Saqlash uchun: qo'shiqni bosib turing > «Forward» (boshqaga yoki Saved Messages'ga) "
@@ -949,11 +971,37 @@ def clamp(v, lo, hi):
 
 
 # ====================== HANDLERLAR ======================
+def webapp_url() -> str:
+    url = os.environ.get("WEBAPP_URL") or os.environ.get("RENDER_EXTERNAL_URL") or ""
+    return url.rstrip("/")
+
+
+def studio_markup():
+    url = webapp_url()
+    if not url.startswith("https://"):
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🎛 Web sahifani ochish", web_app=WebAppInfo(url=url))]])
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update, context):
         return
     name = update.effective_user.first_name or "do'st"
-    await update.message.reply_text(GREETING.format(name=name, minutes=MAX_MINUTES))
+    markup = studio_markup()
+    text = GREETING.format(name=name, minutes=MAX_MINUTES, max_mb=WEB_MAX_BYTES // (1024 * 1024))
+    if not markup:
+        text += "\n\n⚠️ Studiya manzili sozlanmagan (Render'da WEBAPP_URL ni kiriting)."
+    await update.message.reply_text(text, reply_markup=markup, entities=emoji_entities(text))
+
+
+async def redirect_to_studio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Audio yoki matn yuborilsa, hamma ish Studiyada ekanini eslatadi."""
+    if not await check_access(update, context):
+        return
+    await update.message.reply_text(
+        "🎛 Hamma ish endi Studiyada: qo'shiqni shu yerdan emas, pastdagi tugma orqali yuklang.",
+        reply_markup=studio_markup(),
+    )
 
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1271,6 +1319,13 @@ async def _post_init(app):
     global BOT_APP, BOT_LOOP
     BOT_APP = app
     BOT_LOOP = asyncio.get_running_loop()
+    url = webapp_url()
+    if url.startswith("https://"):
+        try:
+            await app.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="Studio", web_app=WebAppInfo(url=url)))
+        except Exception:
+            logger.exception("Menu tugmasini o'rnatib bo'lmadi")
 
 
 def main():
@@ -1291,9 +1346,9 @@ def main():
     app.add_handler(CommandHandler("add", add_cmd))
     app.add_handler(CommandHandler("remove", remove_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
-    app.add_handler(MessageHandler(filters.AUDIO | filters.Document.AUDIO, handle_audio))
+    app.add_handler(MessageHandler(filters.AUDIO | filters.Document.AUDIO, redirect_to_studio))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, redirect_to_studio))
     app.add_error_handler(on_error)
     logger.info("Bot ishga tushdi")
     app.run_polling(drop_pending_updates=True)
