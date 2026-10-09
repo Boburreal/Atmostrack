@@ -65,8 +65,18 @@ h2{font-family:var(--font-d);font-weight:500;font-size:14px;margin:26px 0 12px;c
 .pick svg{width:30px;height:30px;stroke:var(--text)}
 .pick b{font-size:17px;font-weight:700}
 .pick em{font-style:normal;color:var(--muted);font-size:13.5px}
+.sub{display:inline-block;margin:-8px 0 16px;padding:4px 12px;border-radius:999px;font-size:13px;font-weight:600;border:1px solid var(--line);color:var(--muted)}
+.sub.warn{color:var(--copper);border-color:rgba(217,162,115,.5)}
 .file-ok{display:none;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-top:14px}
 .file-ok.on{display:flex}
+.idbox{display:none;margin-top:12px}
+.idbox.on{display:block}
+.idres{display:none;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-top:10px}
+.idres.on{display:flex}
+.idres img{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#1a1d26;flex:none}
+.idres .t{font-weight:700;font-size:15px;overflow:hidden;text-overflow:ellipsis}
+.idres .a{color:var(--muted);font-size:13px}
+.idmsg{color:var(--muted);font-size:13px;margin-top:8px;min-height:18px}
 .file-ok .fn{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-ok .fs{color:var(--muted);font-size:12.5px}
 .file-ok > div{min-width:0}
@@ -193,6 +203,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
     <section class="screen" id="s-file">
       <h1>Qo'shiqni tanlang</h1>
       <p class="lead">Telefoningizdan audio fayl tanlang. Keyingi qadamda effektni tanlaysiz.</p>
+      <p class="sub" id="subInfo" hidden></p>
       <button class="pick" id="pickBtn" type="button">
         <span class="ring"><span><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg></span></span>
         <b>Audio faylni tanlash</b>
@@ -201,6 +212,11 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
       <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.wav,.flac,.ogg,.aac" hidden>
       <div class="file-ok" id="fileOk">
         <div><div class="fn" id="fn"></div><div class="fs" id="fs"></div></div>
+      </div>
+      <div class="idbox" id="idBox">
+        <button class="btn ghost" id="idBtn" type="button">Qo'shiq nomini topish</button>
+        <div class="idmsg" id="idMsg" role="status"></div>
+        <div class="idres" id="idRes"><img id="idImg" alt=""><div style="min-width:0"><div class="t" id="idTitle"></div><div class="a" id="idArtist"></div></div></div>
       </div>
       <div class="soon"><div><b>Vocal remover</b><br>Qo'shiqdan ovozni olib tashlab, faqat musiqasini qoldirish. Tez orada.</div></div>
       <div class="bar"><div><button class="btn primary" id="toPresets" type="button" disabled>Davom etish</button></div></div>
@@ -338,7 +354,7 @@ $('fileInput').addEventListener('change', function(e){
   var maxB = cfg.max_mb*1048576;
   if (f.size > maxB){ toast('Fayl juda katta. '+cfg.max_mb+' MB gacha bo\'lsin.'); e.target.value=''; return; }
   function accept(){
-    state.file = f; state.uploadId = null;
+    state.file = f; state.uploadId = null; resetId();
     $('fn').textContent = f.name; $('fs').textContent = fmtSize(f.size);
     $('fileOk').classList.add('on'); $('toPresets').disabled = true;
     haptic('light');
@@ -366,12 +382,48 @@ function uploadFile(f){
   xhr.onload = function(){
     if (state.file !== f) return;
     var j = {}; try{ j = JSON.parse(xhr.responseText); }catch(e){}
-    if (xhr.status === 200 && j.upload){ state.uploadId = j.upload; $('fs').textContent = fmtSize(f.size)+' · tayyor'; $('toPresets').disabled = false; }
+    if (xhr.status === 200 && j.upload){ state.uploadId = j.upload; $('fs').textContent = fmtSize(f.size)+' · tayyor'; $('toPresets').disabled = false; $('idBox').classList.add('on'); }
     else { $('fs').textContent = j.error || 'Yuklanmadi. Faylni qaytadan tanlang.'; }
   };
   xhr.send(f);
 }
 $('toPresets').addEventListener('click', function(){ if(state.file && state.uploadId) show('presets'); });
+
+/* ---------- qo'shiq nomini topish (Shazam) ---------- */
+function resetId(){
+  state.found = '';
+  $('idBox').classList.remove('on'); $('idRes').classList.remove('on'); $('idMsg').textContent=''; $('idBtn').disabled=false;
+  $('idBtn').textContent = 'Qo\'shiq nomini topish';
+}
+$('idBtn').addEventListener('click', function(){
+  if (!state.uploadId) return;
+  var btn = $('idBtn'), msg = $('idMsg'), upId = state.uploadId;
+  btn.disabled = true; btn.textContent = 'Qidirilmoqda…'; msg.textContent = ''; $('idRes').classList.remove('on'); haptic('light');
+  function fail(t){ if(state.uploadId!==upId) return; btn.disabled=false; btn.textContent='Qaytadan urinib ko\'rish'; msg.textContent=t; }
+  fetch('/api/identify', {method:'POST', headers:{'X-Init-Data':initData, 'X-Upload':upId}})
+  .then(function(r){ return r.json().then(function(j){ j._status=r.status; return j; }); })
+  .then(function(j){
+    if (!j.job) return fail(j.error || 'Boshlab bo\'lmadi.');
+    var n = 0;
+    (function tick(){
+      if (state.uploadId !== upId) return;
+      api('/api/job/'+j.job).then(function(r){
+        if (r.status === 'done'){
+          var res = r.result || {};
+          if (!res.found){ return fail('Qo\'shiq topilmadi. Boshqa fayl bilan yoki qo\'lda nom yozib ko\'ring.'); }
+          state.found = (res.artist ? res.artist+' - ' : '') + res.title;
+          state.nameTouched = false;
+          $('idTitle').textContent = res.title; $('idArtist').textContent = res.artist || '';
+          var img = $('idImg'); if (res.cover && /^https:\/\//.test(res.cover)){ img.src = res.cover; img.style.display=''; } else { img.removeAttribute('src'); img.style.display='none'; }
+          $('idRes').classList.add('on'); msg.textContent = 'Nom keyingi qadamda tayyor turadi.';
+          btn.disabled=false; btn.textContent='Qayta qidirish'; haptic('medium');
+        } else if (r.status === 'error'){ fail(r.message || 'Aniqlab bo\'lmadi.'); }
+        else if (++n > 60){ fail('Uzoq davom etdi. Qaytadan urinib ko\'ring.'); }
+        else setTimeout(tick, 1500);
+      }).catch(function(){ if (++n > 5) fail('Aloqa uzildi.'); else setTimeout(tick, 2000); });
+    })();
+  }).catch(function(){ fail('Aloqa uzildi.'); });
+});
 
 /* ---------- 2. tayyor rejimlar ---------- */
 function eqViz(eq){
@@ -492,7 +544,7 @@ function chooseParams(payload, shown, from){
   if (isPreset){ delete payload.speed; spdUpdate(shown.speed); delete payload.speed; payload.speed = shown.speed; }
   $('sumTitle').textContent = shown.title;
   fillChips($('sumChips'), shown);
-  var guess = state.file ? baseName(state.file.name) : '';
+  var guess = state.found || (state.file ? baseName(state.file.name) : '');
   if (!state.nameTouched) $('nameInput').value = guess;
   $('keepName').hidden = !guess;
   $('nameErr').textContent = '';
@@ -606,7 +658,7 @@ function fail(msg){
 $('closeBtn').addEventListener('click', function(){ if(tg) tg.close(); });
 $('againBtn').addEventListener('click', function(){
   if ($('againBtn').dataset.mode === 'retry'){ $('againBtn').dataset.mode=''; $('closeBtn').style.display=''; $('againBtn').textContent='Yana qo\'shiq'; stack.length=0; stack.push('file','presets'); show('name', false); return; }
-  state.file=null; state.uploadId=null; state.nameTouched=false; $('fileInput').value=''; $('fileOk').classList.remove('on'); $('toPresets').disabled=true;
+  state.file=null; state.uploadId=null; state.nameTouched=false; resetId(); $('fileInput').value=''; $('fileOk').classList.remove('on'); $('toPresets').disabled=true;
   stack.length=0; show('file', false);
 });
 
@@ -623,8 +675,9 @@ function boot(){
   }
   api('/api/me').then(function(j){
     if (j._status === 401){ lock('Telegram ichida oching','Sahifani bot ichidan qayta oching.'); return; }
-    if (!j.allowed){ lock('Ruxsat yo\'q','Sizda hozircha foydalanish uchun ruxsat yo\'q. Adminga so\'rov yuborildi. Ruxsat berilgach sahifani qayta oching.', j.id); return; }
+    if (!j.allowed){ if (j.expired) lock('Obuna tugagan','Obuna muddatingiz tugagan. Yangilash uchun admin\'ga yozing, so\'ng sahifani qayta oching.', j.id); else lock('Ruxsat yo\'q','Sizda hozircha foydalanish uchun ruxsat yo\'q. Adminga so\'rov yuborildi. Ruxsat berilgach sahifani qayta oching.', j.id); return; }
     cfg = j.config;
+    if (typeof j.days_left === 'number'){ var si = $('subInfo'); si.hidden = false; si.textContent = 'Obuna: ' + j.days_left + ' kun qoldi'; si.classList.toggle('warn', j.days_left <= 3); }
     $('limits').textContent = 'mp3, m4a, wav · '+cfg.max_minutes+' daqiqagacha · '+cfg.max_mb+' MB gacha';
     renderPresets();
     show('file', false);
