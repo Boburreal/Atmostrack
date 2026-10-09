@@ -1,5 +1,5 @@
 """
-BS Track Remake Bot  -  1-bosqich
+BS Track Remake Bot + Mini App
 - O'zbekcha salomlashish
 - 4 ta standart rejim: Reverb, Slowed+Reverb, Bass Boost, 8D
 - To'liq qo'lda sozlash: tezlik, reverb, bass, 8D, 9 polosali EQ
@@ -17,7 +17,7 @@ import tempfile
 import threading
 import traceback
 import multiprocessing as mp
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import numpy as np
 from pydub import AudioSegment
@@ -55,26 +55,34 @@ BASE_EQ = [2, -3, -3, 0, 0, 2, 5, 7, 8]   # EQ saytidagi standart sozlamangiz
 
 PRESETS = {
     "reverb": {
-        "title": "Reverb",
-        "speed": 1.0, "reverb": 45, "bass": 0, "eq": BASE_EQ, "is_8d": False, "bitrate": "320k",
+        "title": "Reverb", "desc": "Xona makoni, yumshoq va keng ovoz.",
+        "speed": 1.0, "reverb": 45, "bass": 0, "sub": 0, "eq": BASE_EQ, "is_8d": False, "bitrate": "320k",
     },
     "slowed": {
-        "title": "Slowed + Reverb",
-        "speed": 0.90, "reverb": 40, "bass": 0, "eq": [2, -4, -4, 0, 0, 2, 5, 7, 8], "is_8d": False, "bitrate": "320k",
+        "title": "Slowed + Reverb", "desc": "Sekinlashgan, chuqur va xayolchan ovoz.",
+        "speed": 0.90, "reverb": 40, "bass": 0, "sub": 0, "eq": [2, -4, -4, 0, 0, 2, 5, 7, 8], "is_8d": False, "bitrate": "320k",
     },
     "bass": {
-        "title": "Bass Boost",
-        "speed": 1.0, "reverb": 25, "bass": 8, "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
+        "title": "Bass Boost", "desc": "Kuchli va yumaloq past chastotalar.",
+        "speed": 1.0, "reverb": 25, "bass": 8, "sub": 0, "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
+    },
+    "lowbass": {
+        "title": "Lowbass", "desc": "Haqiqiy sub-bass: chuqur, og'ir va yopiq ovoz. Telefonda ham seziladi.",
+        "speed": 1.0, "reverb": 12, "bass": 4, "sub": 70, "eq": [6, 5, 1, -3, -4, -5, -6, -8, -10], "is_8d": False, "bitrate": "320k",
     },
     "8d": {
-        "title": "8D Audio",
-        "speed": 1.0, "reverb": 22, "bass": 0, "eq": [0, -1, -1, 0, 0, 1, 2, 2, 2], "is_8d": True, "bitrate": "320k",
+        "title": "8D Audio", "desc": "Ovoz boshingiz atrofida aylanadi. Quloqchin bilan eshiting.",
+        "speed": 1.0, "reverb": 22, "bass": 0, "sub": 0, "eq": [0, -1, -1, 0, 0, 1, 2, 2, 2], "is_8d": True, "bitrate": "320k",
+    },
+    "pitchup": {
+        "title": "Pitch Up", "desc": "Tezroq va balandroq ton (nightcore uslubi).",
+        "speed": 1.15, "reverb": 15, "bass": 0, "sub": 0, "eq": [0, -1, -1, 0, 0, 1, 2, 3, 3], "is_8d": False, "bitrate": "320k",
     },
 }
 
 DEFAULT_CUSTOM = {
     "title": "Qo'lda sozlash",
-    "speed": 1.0, "reverb": 45, "bass": 0, "eq": list(BASE_EQ), "is_8d": False, "bitrate": "320k",
+    "speed": 1.0, "reverb": 45, "bass": 0, "sub": 0, "eq": list(BASE_EQ), "is_8d": False, "bitrate": "320k",
 }
 
 logging.basicConfig(level=logging.INFO)
@@ -82,29 +90,289 @@ logger = logging.getLogger("bsbot")
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
-# ====================== HEALTH CHECK (Render / HF uchun) ======================
-class Health(BaseHTTPRequestHandler):
-    """Faqat server tirik ekanini bildiradi. Bu sahifa orqali botdan foydalanib bo'lmaydi."""
+# ====================== MINI APP SERVERI ======================
+# Bitta server ikki ishni qiladi: Mini App sahifasini beradi va uning so'rovlarini qabul qiladi.
+# Xavfsizlik: har bir so'rovda Telegram imzosi (initData, BOT_TOKEN bilan HMAC) tekshiriladi va
+# foydalanuvchi ruxsat ro'yxatida bo'lishi shart. Sahifaning o'zi ochiq, lekin ichida hech qanday sir yo'q.
+import hmac
+import hashlib
+import time
+import uuid
+from urllib.parse import parse_qsl, unquote
+from http.server import ThreadingHTTPServer
 
-    def _head(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
+WEB_DIR = os.path.join(BASE_DIR, "webapp")
+RENDER_LOCK = threading.Lock()       # bir vaqtda bitta ishlov (bot ham, Mini App ham)
+BOT_APP = None                       # Application (post_init'da to'ldiriladi)
+BOT_LOOP = None                      # botning asyncio sikli
+WEB_MAX_BYTES = 25 * 1024 * 1024
+JOBS = {}                            # job_id -> dict
+JOBS_LOCK = threading.Lock()
+_web_notified = set()
 
-    def do_GET(self):
-        self._head()
-        self.wfile.write(b"BS Track bot server is running. Use the Telegram bot.")
 
-    def do_HEAD(self):
-        self._head()
+def validate_init_data(init_data: str):
+    """Telegram initData imzosini tekshiradi. To'g'ri bo'lsa user dict, aks holda None."""
+    if not init_data or len(init_data) > 4096:
+        return None
+    try:
+        pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+        got_hash = pairs.pop("hash", "")
+        if not got_hash:
+            return None
+        check = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+        secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        calc = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calc, got_hash):
+            return None
+        if time.time() - int(pairs.get("auth_date", "0")) > 48 * 3600:
+            return None
+        user = json.loads(pairs.get("user", "{}"))
+        if not isinstance(user, dict) or not isinstance(user.get("id"), int):
+            return None
+        return user
+    except Exception:
+        return None
+
+
+def sanitize_params(raw: dict) -> dict:
+    """Mini App yuborgan qiymatlarni tekshiradi va chegaralaydi (zararli qiymatlardan himoya)."""
+    base = None
+    key = raw.get("preset")
+    if key:
+        if key not in PRESETS:
+            raise ValueError("Noma'lum rejim")
+        base = copy.deepcopy(PRESETS[key])
+    else:
+        c = raw.get("custom") or {}
+        base = copy.deepcopy(DEFAULT_CUSTOM)
+        base["speed"] = round(clamp(float(c.get("speed", 1.0)), 0.5, 1.5), 2)
+        base["reverb"] = int(clamp(int(c.get("reverb", 0)), 0, 100))
+        base["bass"] = int(clamp(int(c.get("bass", 0)), -12, 12))
+        base["sub"] = int(clamp(int(c.get("sub", 0)), 0, 100))
+        base["is_8d"] = bool(c.get("is_8d", False))
+        eq = c.get("eq") or [0] * 9
+        if len(eq) != 9:
+            raise ValueError("EQ noto'g'ri")
+        base["eq"] = [int(clamp(int(v), -12, 12)) for v in eq]
+    return base
+
+
+def public_config() -> dict:
+    presets = []
+    for k, v in PRESETS.items():
+        presets.append({"key": k, **{f: v[f] for f in ("title", "desc", "speed", "reverb", "bass", "sub", "eq", "is_8d")}})
+    return {
+        "presets": presets,
+        "defaults": {f: DEFAULT_CUSTOM[f] for f in ("speed", "reverb", "bass", "sub", "eq", "is_8d")},
+        "eq_labels": EQ_LABELS,
+        "tag": TAG,
+        "max_minutes": MAX_MINUTES,
+        "max_mb": WEB_MAX_BYTES // (1024 * 1024),
+    }
+
+
+def _set_job(job_id, **kw):
+    with JOBS_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id].update(kw)
+
+
+def _cleanup_jobs():
+    now = time.time()
+    with JOBS_LOCK:
+        for k in [k for k, v in JOBS.items() if now - v["t"] > 3600]:
+            JOBS.pop(k, None)
+
+
+def run_web_job(job_id, uid, in_path, params, full_name):
+    artist, title = split_name(full_name)
+    tmpdir = os.path.dirname(in_path)
+    try:
+        out_path = os.path.join(tmpdir, "output.mp3")
+        _set_job(job_id, status="queued")
+        with RENDER_LOCK:
+            _set_job(job_id, status="processing")
+            render_in_subprocess(in_path, out_path, params, title, artist, RENDER_TIMEOUT)
+        _set_job(job_id, status="sending")
+
+        async def _send():
+            thumb = open(THUMB_PATH, "rb") if os.path.exists(THUMB_PATH) else None
+            try:
+                with open(out_path, "rb") as f:
+                    await BOT_APP.bot.send_audio(
+                        chat_id=uid, audio=f, filename=safe_filename(full_name), title=title,
+                        performer=artist or None, thumbnail=thumb,
+                        caption=f"Tayyor: {params.get('title', '')}",
+                        read_timeout=120, write_timeout=300, connect_timeout=30,
+                    )
+                await BOT_APP.bot.send_message(uid, SAVE_HINT)
+            finally:
+                if thumb:
+                    thumb.close()
+
+        asyncio.run_coroutine_threadsafe(_send(), BOT_LOOP).result(timeout=420)
+        _set_job(job_id, status="done")
+    except TooLong:
+        _set_job(job_id, status="error", message=f"Qo'shiq juda uzun. {MAX_MINUTES} daqiqagacha qabul qilinadi.")
+    except RenderTimeout:
+        _set_job(job_id, status="error", message="Ishlov juda uzoq davom etdi. Qisqaroq qo'shiq bilan urinib ko'ring.")
+    except RenderKilled:
+        _set_job(job_id, status="error", message="Server xotirasi yetmadi. Qisqaroq qo'shiq bilan urinib ko'ring.")
+    except Exception as e:
+        logger.exception("Web ishlovida xatolik")
+        _set_job(job_id, status="error", message="Ishlov berishda xatolik yuz berdi. Boshqa fayl bilan urinib ko'ring.")
+    finally:
+        try:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+class Web(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "BSTrack"
 
     def log_message(self, *args):
         pass
 
+    # --- yordamchilar ---
+    def _send(self, code, body: bytes, ctype="application/json; charset=utf-8", extra=None):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _json(self, code, obj):
+        self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+
+    def _file(self, name, ctype):
+        path = os.path.join(WEB_DIR, name) if name == "index.html" else os.path.join(BASE_DIR, name)
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._send(404, b"Not found", "text/plain; charset=utf-8")
+            return
+        extra = {"Cache-Control": "public, max-age=3600"} if ctype.startswith("image") else {}
+        self._send(200, data, ctype, extra)
+
+    def _user(self):
+        return validate_init_data(self.headers.get("X-Init-Data", ""))
+
+    # --- yo'llar ---
+    def do_HEAD(self):
+        self.do_GET()
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path in ("/", "/index.html"):
+            return self._file("index.html", "text/html; charset=utf-8")
+        if path == "/health":
+            return self._send(200, b"BS Track server is running.", "text/plain; charset=utf-8")
+        if path == "/cover.jpg":
+            return self._file("cover.jpg", "image/jpeg")
+        if path == "/cover_thumb.jpg":
+            return self._file("cover_thumb.jpg", "image/jpeg")
+        if path == "/api/me":
+            user = self._user()
+            if not user:
+                return self._json(401, {"ok": False, "error": "telegram"})
+            if not is_allowed(user["id"]):
+                self._notify_admin_once(user)
+                return self._json(200, {"ok": True, "allowed": False, "id": user["id"]})
+            return self._json(200, {"ok": True, "allowed": True, "id": user["id"],
+                                    "name": user.get("first_name", ""), "config": public_config()})
+        if path.startswith("/api/job/"):
+            user = self._user()
+            if not user or not is_allowed(user["id"]):
+                return self._json(403, {"ok": False})
+            with JOBS_LOCK:
+                job = JOBS.get(path.rsplit("/", 1)[-1])
+                if not job or job["uid"] != user["id"]:
+                    return self._json(404, {"ok": False})
+                return self._json(200, {"ok": True, "status": job["status"], "message": job.get("message", "")})
+        self._send(404, b"Not found", "text/plain; charset=utf-8")
+
+    def _notify_admin_once(self, user):
+        uid = user["id"]
+        if ADMIN_ID and BOT_LOOP and uid not in _web_notified and uid not in _notified:
+            _web_notified.add(uid)
+            text = (f"Mini App'da ruxsat so'ralmoqda:\n{user.get('first_name', '')} (@{user.get('username', '')})\n"
+                    f"ID: {uid}\n\nRuxsat berish: /add {uid}")
+            asyncio.run_coroutine_threadsafe(BOT_APP.bot.send_message(ADMIN_ID, text), BOT_LOOP)
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path != "/api/render":
+            return self._send(404, b"Not found", "text/plain; charset=utf-8")
+        user = self._user()
+        if not user:
+            return self._json(401, {"ok": False, "error": "Telegram ichida oching."})
+        if not is_allowed(user["id"]):
+            return self._json(403, {"ok": False, "error": "Sizda ruxsat yo'q."})
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return self._json(400, {"ok": False, "error": "Fayl yuborilmadi."})
+        if length > WEB_MAX_BYTES:
+            return self._json(413, {"ok": False, "error": f"Fayl juda katta ({WEB_MAX_BYTES // (1024 * 1024)} MB gacha)."})
+
+        _cleanup_jobs()
+        with JOBS_LOCK:
+            busy = [j for j in JOBS.values() if j["uid"] == user["id"] and j["status"] in ("queued", "processing", "sending")]
+        if busy:
+            return self._json(429, {"ok": False, "error": "Oldingi qo'shiq hali ishlanmoqda. Tugashini kuting."})
+
+        try:
+            params = sanitize_params(json.loads(unquote(self.headers.get("X-Params", "{}"))))
+            raw_name = unquote(self.headers.get("X-Name", "")).strip()
+        except Exception:
+            return self._json(400, {"ok": False, "error": "Sozlamalar noto'g'ri."})
+        if not raw_name or len(raw_name) > 100:
+            return self._json(400, {"ok": False, "error": "Nom 1 dan 100 belgigacha bo'lsin."})
+
+        import tempfile as _tf
+        tmpdir = _tf.mkdtemp(prefix="web_")
+        in_path = os.path.join(tmpdir, "input")
+        try:
+            remaining = length
+            with open(in_path, "wb") as f:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        raise ConnectionError("upload uzildi")
+                    f.write(chunk)
+                    remaining -= len(chunk)
+        except Exception:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return self._json(400, {"ok": False, "error": "Fayl yuklanmadi. Qaytadan urinib ko'ring."})
+
+        job_id = uuid.uuid4().hex
+        with JOBS_LOCK:
+            JOBS[job_id] = {"uid": user["id"], "status": "queued", "t": time.time()}
+        threading.Thread(
+            target=run_web_job, args=(job_id, user["id"], in_path, params, with_tag(raw_name)), daemon=True
+        ).start()
+        self._json(202, {"ok": True, "job": job_id})
+
 
 def run_health():
     port = int(os.environ.get("PORT", 7860))
-    HTTPServer(("0.0.0.0", port), Health).serve_forever()
+    srv = ThreadingHTTPServer(("0.0.0.0", port), Web)
+    srv.daemon_threads = True
+    srv.serve_forever()
 
 
 # ====================== RUXSAT TIZIMI ======================
@@ -337,6 +605,47 @@ class Rotator8D:
         return np.vstack([out_l, out_r]).astype(np.float32)
 
 
+class SubBass:
+    """Haqiqiy sub-bass (Lowbass). Oddiy bass tovushni shunchaki baland qiladi, bu esa yangi past chastota yaratadi:
+    1) 110 Hz dan past qism ajratiladi (kick + bass chizig'i),
+    2) oktava pastga tushiriladi (chastota bo'luvchi: 80 Hz -> 40 Hz) va silliqlanadi - chuqur "gumburlash",
+    3) yengil to'yintirish (saturatsiya) 2-3 garmonika qo'shadi - kichik dinamikda va telefonda ham eshitiladi.
+    Holat bo'laklar orasida saqlanadi."""
+
+    def __init__(self, sr: int, amount: float):
+        self.sr = sr
+        self.amt = max(0.0, min(1.0, amount / 100.0))
+        self.lp_in = Pedalboard([LowpassFilter(110.0), LowpassFilter(110.0)])
+        self.lp_sub = Pedalboard([LowpassFilter(70.0), LowpassFilter(70.0)])
+        self.lp_env = Pedalboard([LowpassFilter(18.0)])
+        self.lp_harm = Pedalboard([LowpassFilter(220.0), LowpassFilter(220.0)])
+        self.state = 1.0
+        self.prev = 0.0
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        sr = self.sr
+        mid = ((x[0] + x[1]) * 0.5).astype(np.float32)
+        low = self.lp_in(mid[None, :], sr, reset=False)[0]
+
+        # oktava pastga: musbat tomonga o'tishlarda holat almashadi (80 Hz -> 40 Hz kvadrat to'lqin)
+        ext = np.concatenate([[self.prev], low])
+        cross = (ext[:-1] <= 0.0) & (ext[1:] > 0.0)
+        parity = (np.cumsum(cross) & 1).astype(np.float32)
+        sq = (self.state * np.where(parity > 0, -1.0, 1.0)).astype(np.float32)
+        if int(cross.sum()) & 1:
+            self.state = -self.state
+        self.prev = float(low[-1])
+
+        env = self.lp_env(np.abs(low)[None, :].astype(np.float32), sr, reset=False)[0] * 1.8
+        sub = self.lp_sub(sq[None, :], sr, reset=False)[0] * np.minimum(env, 0.6) * 1.6
+
+        drive = np.tanh(low * 4.0) * 0.5
+        harm = self.lp_harm(drive[None, :].astype(np.float32), sr, reset=False)[0]
+
+        add = (sub * 1.0 + harm * 0.6 + low * 0.5) * self.amt * 1.6
+        return (x + add[None, :]).astype(np.float32)
+
+
 def build_pre_board_8d(p: dict) -> Pedalboard:
     """8D uchun aylanishdan OLDIN: bass va ekvalayzer."""
     board = Pedalboard([])
@@ -388,6 +697,7 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
         post_board = build_post_board_8d(p)
     else:
         board = build_board(p)
+    subbass = SubBass(sr, float(p.get("sub", 0))) if p.get("sub", 0) > 0 else None
     tail = sr * 2 if p.get("reverb", 0) > 0 else 0        # reverb dumi uchun 2 soniya
     out_len = n_total + tail
     stage = np.empty((out_len, 2), dtype=np.int16)
@@ -399,6 +709,8 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
         if real_end > i:
             chunk[: real_end - i] = data[i:real_end].astype(np.float32) / 32768.0
         chunk = np.ascontiguousarray(chunk.T)
+        if subbass is not None:
+            chunk = subbass.process(chunk)
         if is_8d:
             if len(pre_board) > 0:
                 chunk = pre_board(chunk, sr, reset=False)
@@ -530,16 +842,20 @@ def safe_filename(name: str) -> str:
 
 # ====================== MATNLAR VA TUGMALAR ======================
 GREETING = (
-    "Assalomu alaykum, {name}! Xush kelibsiz.\n\n"
-    "Men BS Track musiqa botiman. Qo'shig'ingizni professional effektlar bilan "
-    "yangicha ovozga keltirib beraman.\n\n"
-    "Nimalar qila olaman:\n"
-    "• Reverb, Slowed + Reverb, Bass Boost va 8D rejimlar\n"
-    "• To'liq qo'lda sozlash: tezlik, reverb, bass va 9 polosali ekvalayzer\n"
-    "• Qo'shiqqa o'zingiz xohlagan nomni berish va muqova qo'yish\n\n"
-    "Boshlash uchun menga shunchaki qo'shiq (audio fayl) yuboring.\n"
-    "Eslatma: qo'shiq {minutes} daqiqadan oshmasin va 20 MB dan katta bo'lmasin.\n\n"
-    "Tez orada yana: ovozni olib tashlash (vocal remover)."
+    "👋 Assalomu alaykum, {name}! Xush kelibsiz!\n\n"
+    "🎧 Men BS Track botiman: qo'shig'ingizni shunday o'zgartiramanki, "
+    "hatto asl ijrochining o'zi ham «bu menmi?» deb qoladi 😎\n\n"
+    "🔥 Nimalar qila olaman:\n"
+    "🌊 Reverb va Slowed + Reverb, xuddi hovuz ichida kuylagandek\n"
+    "💥 Bass Boost va Lowbass, qo'shni «tinchlaning» deb eshik qoqadi 🚪\n"
+    "🌀 8D Audio, tovush boshingiz atrofida aylanadi (quloqchin taqing!)\n"
+    "⏫ Pitch Up, ovoz ham, kayfiyat ham balandlaydi\n"
+    "🎛 Qo'lda sozlash: tezlik, reverb, bass, sub-bass va 9 polosali ekvalayzer\n"
+    "🏷 Nom qo'yish va BS Track muqovasi tayyor\n\n"
+    "🚀 Boshlash juda oson: menga qo'shiq (audio fayl) yuboring!\n"
+    "📏 Qo'shiq {minutes} daqiqadan oshmasin va 20 MB dan katta bo'lmasin "
+    "(bot ham charchaydi 😅).\n\n"
+    "🎤 Tez orada: ovozni olib tashlash (vocal remover), xonanda tanaffusga chiqadi 😄"
 )
 
 SAVE_HINT = (
@@ -553,8 +869,11 @@ def main_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Reverb", callback_data="p:reverb"),
          InlineKeyboardButton("Slowed + Reverb", callback_data="p:slowed")],
         [InlineKeyboardButton("Bass Boost", callback_data="p:bass"),
-         InlineKeyboardButton("8D Audio", callback_data="p:8d")],
+         InlineKeyboardButton("Lowbass", callback_data="p:lowbass")],
+        [InlineKeyboardButton("8D Audio", callback_data="p:8d"),
+         InlineKeyboardButton("Pitch Up", callback_data="p:pitchup")],
         [InlineKeyboardButton("Qo'lda sozlash", callback_data="m:custom")],
+        [InlineKeyboardButton("Bekor qilish", callback_data="n:cancel")],
     ])
 
 
@@ -572,6 +891,7 @@ def custom_text(p: dict) -> str:
         f"Tezlik: {p['speed']:.2f}x\n"
         f"Reverb: {p['reverb']}%\n"
         f"Bass: {fmt_db(p['bass'])}\n"
+        f"Sub-bass: {p['sub']}%\n"
         f"8D: {onoff(p['is_8d'])}\n\n"
         "«−» va «+» tugmalari bilan o'zgartiring, tayyor bo'lgach «Tayyor» ni bosing."
     )
@@ -588,10 +908,14 @@ def custom_menu(p: dict) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Bass −", callback_data="c:bass:-"),
          InlineKeyboardButton(fmt_db(p['bass']), callback_data="noop"),
          InlineKeyboardButton("Bass +", callback_data="c:bass:+")],
+        [InlineKeyboardButton("Sub-bass −", callback_data="c:sub:-"),
+         InlineKeyboardButton(f"{p['sub']}%", callback_data="noop"),
+         InlineKeyboardButton("Sub-bass +", callback_data="c:sub:+")],
         [InlineKeyboardButton(f"8D: {onoff(p['is_8d'])} (almashtirish)", callback_data="c:8d")],
         [InlineKeyboardButton("Ekvalayzer (EQ)", callback_data="c:eq")],
         [InlineKeyboardButton("Boshlang'ich holat", callback_data="c:reset"),
          InlineKeyboardButton("Tayyor", callback_data="c:done")],
+        [InlineKeyboardButton("Orqaga", callback_data="c:back")],
     ])
 
 
@@ -664,6 +988,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["file_id"] = file_obj.file_id
     context.user_data["orig_title"] = getattr(file_obj, "title", None) or ""
     context.user_data["orig_artist"] = getattr(file_obj, "performer", None) or ""
+    context.user_data["orig_filename"] = getattr(file_obj, "file_name", None) or ""
     context.user_data["custom"] = copy.deepcopy(DEFAULT_CUSTOM)
 
     await msg.reply_text(
@@ -676,12 +1001,18 @@ async def ask_name(query, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_name"] = True
     t, a = context.user_data.get("orig_title", ""), context.user_data.get("orig_artist", "")
     orig = f"{a} - {t}" if a and t else (t or "")
+    if not orig:
+        # audio ichida nom yo'q bo'lsa, fayl nomidan olamiz
+        fn = context.user_data.get("orig_filename", "")
+        fn = re.sub(r"\.[A-Za-z0-9]{2,5}$", "", fn).replace("_", " ")
+        orig = re.sub(r"\s+", " ", fn).strip()
 
     rows = []
     if orig:
         context.user_data["orig_full"] = orig
-        rows.append([InlineKeyboardButton("Asl nomni qoldirish", callback_data="n:keep")])
-    rows.append([InlineKeyboardButton("Bekor qilish", callback_data="n:cancel")])
+        rows.append([InlineKeyboardButton("✅ Asl nomni qoldirish", callback_data="n:keep")])
+    rows.append([InlineKeyboardButton("Orqaga", callback_data="n:back"),
+                 InlineKeyboardButton("Bekor qilish", callback_data="n:cancel")])
 
     text = (
         "Qo'shiq nomini yozing.\n"
@@ -715,6 +1046,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit(query, "Noma'lum rejim.")
             return
         ud["params"] = copy.deepcopy(PRESETS[key])
+        ud["name_back"] = "main"
         await ask_name(query, context)
         return
 
@@ -735,6 +1067,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             p["reverb"] = clamp(p["reverb"] + 5 * sign, 0, 100)
         elif action == "bass":
             p["bass"] = clamp(p["bass"] + 2 * sign, -12, 12)
+        elif action == "sub":
+            p["sub"] = clamp(p.get("sub", 0) + 10 * sign, 0, 100)
+        elif action == "back":
+            await safe_edit(query, "Qanday ishlov beramiz?", main_menu())
+            return
         elif action == "8d":
             p["is_8d"] = not p["is_8d"]
         elif action == "reset":
@@ -745,6 +1082,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         elif action == "done":
             ud["params"] = copy.deepcopy(p)
+            ud["name_back"] = "custom"
             await ask_name(query, context)
             return
 
@@ -777,9 +1115,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await run_job(query.message, context, orig)
         return
 
+    if data == "n:back":
+        ud["awaiting_name"] = False
+        if ud.get("name_back") == "custom":
+            p = ud.setdefault("custom", copy.deepcopy(DEFAULT_CUSTOM))
+            await safe_edit(query, custom_text(p), custom_menu(p))
+        else:
+            await safe_edit(query, "Qanday ishlov beramiz?", main_menu())
+        return
+
     if data == "n:cancel":
         ud["awaiting_name"] = False
-        await safe_edit(query, "Bekor qilindi. Boshqa effekt tanlang:", main_menu())
+        await safe_edit(query, "Bekor qilindi. Xohlasangiz, boshqa effekt tanlang:", main_menu())
         return
 
     if data == "again":
@@ -804,6 +1151,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ud["awaiting_name"] = False
     await run_job(update.message, context, name)
+
+
+def locked_render(*args):
+    with RENDER_LOCK:
+        render_in_subprocess(*args)
 
 
 JOB_LOCK = asyncio.Semaphore(1)   # bir vaqtda bitta qo'shiq (xotirani tejash uchun)
@@ -832,9 +1184,7 @@ async def run_job(msg, context: ContextTypes.DEFAULT_TYPE, raw_name: str):
                 in_path = os.path.join(tmp, "input")
                 out_path = os.path.join(tmp, "output.mp3")
                 await tg_file.download_to_drive(in_path)
-                await asyncio.to_thread(
-                    render_in_subprocess, in_path, out_path, params, title, artist, RENDER_TIMEOUT
-                )
+                await asyncio.to_thread(locked_render, in_path, out_path, params, title, artist, RENDER_TIMEOUT)
 
                 thumb = open(THUMB_PATH, "rb") if os.path.exists(THUMB_PATH) else None
                 try:
@@ -917,6 +1267,12 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
         logger.error("Kutilmagan xato: %s", err, exc_info=err)
 
 
+async def _post_init(app):
+    global BOT_APP, BOT_LOOP
+    BOT_APP = app
+    BOT_LOOP = asyncio.get_running_loop()
+
+
 def main():
     threading.Thread(target=run_health, daemon=True).start()
 
@@ -926,6 +1282,7 @@ def main():
         .read_timeout(60)
         .write_timeout(120)
         .connect_timeout(30)
+        .post_init(_post_init)
         .build()
     )
     app.add_handler(CommandHandler("start", start))
