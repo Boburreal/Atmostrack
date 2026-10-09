@@ -54,6 +54,10 @@ EQ_LABELS = ["60 Hz", "170 Hz", "310 Hz", "600 Hz", "1 kHz", "3 kHz", "6 kHz", "
 BASE_EQ = [2, -3, -3, 0, 0, 2, 5, 7, 8]   # EQ saytidagi standart sozlamangiz
 
 PRESETS = {
+    "plain": {      # effektsiz: faqat nom, muqova (logo) va mp3
+        "title": "Faqat nom va muqova", "desc": "Effektsiz. Qo'shiq o'zgarmaydi.",
+        "speed": 1.0, "reverb": 0, "bass": 0, "sub": 0, "eq": [0] * 9, "is_8d": False, "bitrate": "320k", "plain": True,
+    },
     "reverb": {
         "title": "Reverb", "desc": "Xona makoni, yumshoq va keng ovoz.",
         "speed": 1.0, "reverb": 45, "bass": 0, "sub": 0, "eq": BASE_EQ, "is_8d": False, "bitrate": "320k",
@@ -141,7 +145,7 @@ def sanitize_params(raw: dict) -> dict:
         if key not in PRESETS:
             raise ValueError("Noma'lum rejim")
         base = copy.deepcopy(PRESETS[key])
-        if raw.get("speed") is not None:       # foydalanuvchi tezlikni o'zi tanlagan
+        if raw.get("speed") is not None and not base.get("plain"):       # foydalanuvchi tezlikni o'zi tanlagan
             base["speed"] = round(clamp(float(raw["speed"]), 0.5, 1.5), 2)
     else:
         c = raw.get("custom") or {}
@@ -161,6 +165,8 @@ def sanitize_params(raw: dict) -> dict:
 def public_config() -> dict:
     presets = []
     for k, v in PRESETS.items():
+        if v.get("plain"):
+            continue                      # alohida tugma sifatida ko'rsatiladi
         presets.append({"key": k, **{f: v[f] for f in ("title", "desc", "speed", "reverb", "bass", "sub", "eq", "is_8d")}})
     return {
         "presets": presets,
@@ -1035,8 +1041,31 @@ def build_post_board_8d(p: dict) -> Pedalboard:
     return board
 
 
+def render_plain(in_path: str, out_path: str, p: dict, title: str, artist: str):
+    """Effektsiz rejim: ovoz o'zgarmaydi. mp3 bo'lsa sifat yo'qolmasligi uchun nusxalanadi,
+    boshqa format bo'lsa mp3 (320 kbps) ga o'giriladi. Keyin nom va logo muqova yoziladi."""
+    import subprocess
+
+    def probe(entry, stream=False):
+        args = ["ffprobe", "-v", "error"]
+        args += ["-select_streams", "a:0", "-show_entries", "stream=" + entry] if stream else ["-show_entries", "format=" + entry]
+        r = subprocess.run(args + ["-of", "default=nw=1:nk=1", in_path], capture_output=True, text=True, timeout=60)
+        return r.stdout.strip()
+
+    if float(probe("duration") or 0) > MAX_DURATION_SEC:
+        raise TooLong()
+    codec = probe("codec_name", stream=True)
+    cmd = ["ffmpeg", "-v", "error", "-y", "-i", in_path, "-vn", "-map", "0:a:0", "-map_metadata", "-1"]
+    cmd += ["-c:a", "copy"] if codec == "mp3" else ["-c:a", "libmp3lame", "-b:a", p.get("bitrate", "320k")]
+    subprocess.run(cmd + ["-f", "mp3", out_path], check=True, timeout=300)
+    if not p.get("preview"):
+        write_tags(out_path, title, artist)
+
+
 def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
     """Bo'laklab ishlov berish: xotira kam sarflanadi (Render bepul tarifi uchun muhim)."""
+    if p.get("plain"):
+        return render_plain(in_path, out_path, p, title, artist)
     sound = AudioSegment.from_file(in_path)
     if len(sound) > MAX_DURATION_SEC * 1000:
         raise TooLong()
