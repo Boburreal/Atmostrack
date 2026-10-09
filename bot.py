@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import numpy as np
 from pydub import AudioSegment
-from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter, Limiter
+from pedalboard import Pedalboard, Reverb, PeakFilter, LowShelfFilter, LowpassFilter, Limiter
 from mutagen.id3 import ID3, TIT2, TPE1, APIC, ID3NoHeaderError
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -68,7 +68,7 @@ PRESETS = {
     },
     "8d": {
         "title": "8D Audio",
-        "speed": 1.0, "reverb": 45, "bass": 2, "eq": [5, 3, 0, 0, 1, 2, 3, 2, 1], "is_8d": True, "bitrate": "320k",
+        "speed": 1.0, "reverb": 22, "bass": 0, "eq": [0, -1, -1, 0, 0, 1, 2, 2, 2], "is_8d": True, "bitrate": "320k",
     },
 }
 
@@ -267,19 +267,97 @@ def build_board(p: dict) -> Pedalboard:
 
 CHUNK_SEC = 10          # qo'shiq bo'laklab ishlanadi (xotirani tejash uchun)
 STAGE_SCALE = 0.5       # oraliq saqlashda -6 dB zaxira
+PEAK_CEILING = 0.89     # chiqish cho'qqisi chegarasi (~ -1 dBFS)
 
 
-def apply_8d_chunk(chunk: np.ndarray, sr: int, offset: int) -> np.ndarray:
-    """Ovoz boshni aylanib chiqqandek (teng quvvatli panning, ~8 soniyada bir aylanish).
-    chunk: (2, n) float32; offset: shu bo'lakning qo'shiq boshidan necha namunadan boshlanishi."""
-    n = chunk.shape[1]
-    mono = (chunk[0] + chunk[1]) * 0.5
-    t = (np.arange(n, dtype=np.float64) + offset) / sr
-    pan = np.sin(2 * np.pi * 0.125 * t).astype(np.float32)   # -1 (chap) .. +1 (o'ng)
-    angle = (pan + 1.0) * (np.pi / 4.0)                       # 0 .. pi/2
-    left = mono * np.cos(angle) * 1.35 + chunk[0] * 0.25
-    right = mono * np.sin(angle) * 1.35 + chunk[1] * 0.25
-    return np.vstack([left, right]).astype(np.float32)
+class Rotator8D:
+    """Haqiqiy 3D (binaural) aylanish. Oddiy 8D'dagidek faqat balandlikni chapga-o'ngga surmaydi:
+    1) ITD - tovush bir quloqqa ikkinchisidan sal oldin yetib boradi (~0.66 ms gacha),
+    2) bosh soyasi - uzoq quloqda yuqori chastotalar so'nadi va sal past eshitiladi,
+    3) old/orqa - orqada aylanganda tovush biroz xira va uzoqroq eshitiladi,
+    4) bass (160 Hz dan past) markazda qoladi - u yo'nalishni sezdirmaydi, shuning uchun
+       chap-o'ng tebranish va bass "sakrashi" bo'lmaydi,
+    5) asl stereo kengligi (side) saqlanadi.
+    Bo'laklab ishlashi uchun filtr holatlari va kechikish tarixi bo'laklar orasida saqlanadi."""
+
+    ITD_MAX = 0.00066        # soniya
+    HIST = 128               # kechikish tarixi (namuna)
+    SPEED_HZ = 0.08          # to'liq aylanish ~12,5 soniyada
+    SIDE_GAIN = 0.7
+
+    def __init__(self, sr: int):
+        self.sr = sr
+        self.pos = 0
+        self.low_board = Pedalboard([LowpassFilter(160.0), LowpassFilter(160.0)])
+        self.shadow_board = Pedalboard([LowpassFilter(3200.0)])
+        self.hist_l = np.zeros(self.HIST, dtype=np.float32)
+        self.hist_r = np.zeros(self.HIST, dtype=np.float32)
+
+    def _delay(self, sig, d, hist):
+        n = sig.shape[0]
+        buf = np.concatenate([hist, sig])
+        pos = np.arange(n, dtype=np.float64) + self.HIST - d
+        i0 = np.floor(pos).astype(np.int64)
+        fr = (pos - i0).astype(np.float32)
+        i1 = np.minimum(i0 + 1, buf.shape[0] - 1)
+        out = buf[i0] * (1.0 - fr) + buf[i1] * fr
+        return out.astype(np.float32), buf[-self.HIST:].copy()
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        sr = self.sr
+        left, right = x[0], x[1]
+        mid = (left + right) * 0.5
+        side = (left - right) * 0.5
+        n = mid.shape[0]
+
+        low = self.low_board(mid[None, :], sr, reset=False)[0]
+        high = mid - low
+        shadow = self.shadow_board(high[None, :], sr, reset=False)[0]
+
+        t = (np.arange(n, dtype=np.float64) + self.pos) / sr
+        self.pos += n
+        theta = 2.0 * np.pi * self.SPEED_HZ * t
+        lat = np.sin(theta).astype(np.float32)           # +1 = to'liq o'ng, -1 = to'liq chap
+        back = np.maximum(0.0, -np.cos(theta)).astype(np.float32)   # 0 = old, 1 = orqa
+        to_r = np.maximum(0.0, lat)                       # manba o'ngda: chap quloq uzoq
+        to_l = np.maximum(0.0, -lat)                      # manba chapda: o'ng quloq uzoq
+
+        w_l = np.clip(0.7 * to_r + 0.5 * back, 0.0, 0.9)
+        w_r = np.clip(0.7 * to_l + 0.5 * back, 0.0, 0.9)
+        g_l = 1.0 - 0.3 * to_r + 0.1 * to_l - 0.08 * back
+        g_r = 1.0 - 0.3 * to_l + 0.1 * to_r - 0.08 * back
+        ear_l = g_l * ((1.0 - w_l) * high + w_l * shadow)
+        ear_r = g_r * ((1.0 - w_r) * high + w_r * shadow)
+
+        ear_l, self.hist_l = self._delay(ear_l, self.ITD_MAX * to_r * sr, self.hist_l)
+        ear_r, self.hist_r = self._delay(ear_r, self.ITD_MAX * to_l * sr, self.hist_r)
+
+        out_l = low + ear_l + self.SIDE_GAIN * side
+        out_r = low + ear_r - self.SIDE_GAIN * side
+        return np.vstack([out_l, out_r]).astype(np.float32)
+
+
+def build_pre_board_8d(p: dict) -> Pedalboard:
+    """8D uchun aylanishdan OLDIN: bass va ekvalayzer."""
+    board = Pedalboard([])
+    bass = p.get("bass", 0)
+    if bass != 0:
+        board.append(LowShelfFilter(cutoff_frequency_hz=100, gain_db=float(bass), q=0.7))
+    for freq, gain in zip(EQ_BANDS, p.get("eq", [0] * 9)):
+        if gain != 0:
+            board.append(PeakFilter(cutoff_frequency_hz=freq, gain_db=float(gain), q=1.0))
+    return board
+
+
+def build_post_board_8d(p: dict) -> Pedalboard:
+    """8D uchun aylanishdan KEYIN: yengil xona (reverb) - atrofdagi makon hissi uchun."""
+    board = Pedalboard([])
+    rev = p.get("reverb", 0)
+    if rev > 0:
+        wet = min(rev, 60) / 100.0
+        board.append(Reverb(room_size=min(0.9, 0.35 + wet * 0.5), damping=0.6,
+                            wet_level=wet, dry_level=1 - wet * 0.4, width=1.0))
+    return board
 
 
 def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
@@ -302,8 +380,14 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
         sumsq += float(np.sum(c.astype(np.float64) ** 2))
     ref_rms = (sumsq / (n_total * 2)) ** 0.5 + 1e-9
 
-    # 2) effektlar (bass > reverb > EQ > 8D), bo'laklab
-    board = build_board(p)
+    # 2) effektlar (oddiy: bass > reverb > EQ; 8D: bass+EQ > aylanish > reverb), bo'laklab
+    is_8d = bool(p.get("is_8d"))
+    if is_8d:
+        pre_board = build_pre_board_8d(p)
+        rotator = Rotator8D(sr)
+        post_board = build_post_board_8d(p)
+    else:
+        board = build_board(p)
     tail = sr * 2 if p.get("reverb", 0) > 0 else 0        # reverb dumi uchun 2 soniya
     out_len = n_total + tail
     stage = np.empty((out_len, 2), dtype=np.int16)
@@ -315,10 +399,14 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
         if real_end > i:
             chunk[: real_end - i] = data[i:real_end].astype(np.float32) / 32768.0
         chunk = np.ascontiguousarray(chunk.T)
-        if len(board) > 0:
+        if is_8d:
+            if len(pre_board) > 0:
+                chunk = pre_board(chunk, sr, reset=False)
+            chunk = rotator.process(chunk)
+            if len(post_board) > 0:
+                chunk = post_board(chunk, sr, reset=False)
+        elif len(board) > 0:
             chunk = board(chunk, sr, reset=False)
-        if p.get("is_8d"):
-            chunk = apply_8d_chunk(chunk, sr, i)
         valid = max(0, real_end - i)
         if valid:
             sumsq2 += float(np.sum(chunk[:, :valid].astype(np.float64) ** 2))
@@ -326,17 +414,27 @@ def render_audio(in_path: str, out_path: str, p: dict, title: str, artist: str):
     del data, sound
     proc_rms = (sumsq2 / (n_total * 2)) ** 0.5 + 1e-9
 
-    # 3) balandlikni asl qo'shiqqa tenglashtirish + yumshoq limiter
+    # 3) balandlikni asl qo'shiqqa tenglashtirish. Limiter o'zi balandlikni oshirib yuboradi,
+    #    shuning uchun uni o'tkazgach qayta o'lchab, asl qo'shiq balandligiga qaytaramiz.
     gain = min(max(ref_rms / proc_rms, 0.25), 4.0)                  # -12 dB ... +12 dB
     gain_total = gain / STAGE_SCALE
     limiter = Pedalboard([Limiter(threshold_db=-1.5, release_ms=100.0)])
+    sumsq3 = 0.0
     for i in range(0, out_len, step):
         j = min(i + step, out_len)
         c = stage[i:j].astype(np.float32) / 32768.0 * gain_total
         c = np.ascontiguousarray(c.T)
         c = limiter(c, sr, reset=False)
-        c = np.clip(c, -0.85, 0.85)                                  # mp3 uchun -1 dBFS zaxira
+        c = np.clip(c, -1.0, 1.0)
+        valid = max(0, min(j, n_total) - i)
+        if valid:
+            sumsq3 += float(np.sum(c[:, :valid].astype(np.float64) ** 2))
         stage[i:j] = (c.T * 32767.0).astype(np.int16)
+    post_rms = (sumsq3 / (n_total * 2)) ** 0.5 + 1e-9
+    final = min(ref_rms / post_rms, PEAK_CEILING)                    # cho'qqilar -1 dBFS dan oshmasin
+    for i in range(0, out_len, step):
+        j = min(i + step, out_len)
+        stage[i:j] = (stage[i:j].astype(np.float32) * final).astype(np.int16)
 
     out = AudioSegment(stage.tobytes(), frame_rate=sr, sample_width=2, channels=2)
     del stage
