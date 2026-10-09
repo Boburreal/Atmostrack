@@ -67,8 +67,8 @@ PRESETS = {
         "speed": 1.0, "reverb": 25, "bass": 8, "sub": 0, "eq": [10, 8, 4, 1, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
     },
     "lowbass": {
-        "title": "Lowbass", "desc": "Haqiqiy sub-bass: chuqur, og'ir va yopiq ovoz. Telefonda ham seziladi.",
-        "speed": 1.0, "reverb": 12, "bass": 4, "sub": 70, "eq": [6, 5, 1, -3, -4, -5, -6, -8, -10], "is_8d": False, "bitrate": "320k",
+        "title": "Lowbass", "desc": "Yumshoq bass: iliq, silliq va yoqimli past tovush. Qulog'ni charchatmaydi.",
+        "speed": 1.0, "reverb": 10, "bass": 3, "sub": 0, "eq": [4, 3, 1, 0, 0, 0, 0, 0, 0], "is_8d": False, "bitrate": "320k",
     },
     "8d": {
         "title": "8D Audio", "desc": "Ovoz boshingiz atrofida aylanadi. Quloqchin bilan eshiting.",
